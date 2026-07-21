@@ -1,0 +1,22 @@
+{
+  "source": "Stocks SIRENE Etablissement et UniteLegale INSEE, enrichis par ODS SIRENE/BAN",
+  "source_url": "https://www.data.gouv.fr/datasets/base-sirene-des-entreprises-et-de-leurs-etablissements-siren-siret",
+  "source_reference_date": "2026-07-01",
+  "retrieved_at": "2026-07-19",
+  "establishment_count": "129163",
+  "company_count": "120710",
+  "legal_unit_count": "120710",
+  "geolocated_count": "115920",
+  "commune_count": "32",
+  "sector_count": "16",
+  "coverage_notice": "Unités légales et établissements actifs des stocks INSEE 2026-07 dans les 32 communes 971; seules les coordonnées manquantes non restreintes sont enrichies depuis ODS SIRENE/BAN 2026-04.",
+  "legal_units": 120710,
+  "geolocated": 115920,
+  "establishments": 129163,
+  "employer_establishments": 20933,
+  "known_workforce_establishments": 12190,
+  "head_offices": 118050,
+  "privacy_restricted_establishments": 11409,
+  "coordinates_enriched": 45766,
+  "database": "C:\\Users\\Labry\\Documents\\GUAD\\data\\guadeloupe-enterprises.sqlite"
+}

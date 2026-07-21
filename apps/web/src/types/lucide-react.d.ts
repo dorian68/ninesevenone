@@ -1,0 +1,52 @@
+declare module "lucide-react" {
+  import type { ComponentType, SVGProps } from "react";
+
+  export type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
+
+  export const Activity: LucideIcon;
+  export const BarChart3: LucideIcon;
+  export const Bookmark: LucideIcon;
+  export const Check: LucideIcon;
+  export const CheckCircle2: LucideIcon;
+  export const AlertTriangle: LucideIcon;
+  export const Building2: LucideIcon;
+  export const BriefcaseBusiness: LucideIcon;
+  export const Accessibility: LucideIcon;
+  export const ChevronDown: LucideIcon;
+  export const CircleAlert: LucideIcon;
+  export const Clock3: LucideIcon;
+  export const Crosshair: LucideIcon;
+  export const Database: LucideIcon;
+  export const Download: LucideIcon;
+  export const ExternalLink: LucideIcon;
+  export const Filter: LucideIcon;
+  export const FileText: LucideIcon;
+  export const FlaskConical: LucideIcon;
+  export const Globe2: LucideIcon;
+  export const Layers3: LucideIcon;
+  export const Landmark: LucideIcon;
+  export const List: LucideIcon;
+  export const LogIn: LucideIcon;
+  export const LogOut: LucideIcon;
+  export const Lightbulb: LucideIcon;
+  export const LockKeyhole: LucideIcon;
+  export const Mail: LucideIcon;
+  export const MapPin: LucideIcon;
+  export const MapPinned: LucideIcon;
+  export const Moon: LucideIcon;
+  export const Newspaper: LucideIcon;
+  export const PanelLeftClose: LucideIcon;
+  export const PanelLeftOpen: LucideIcon;
+  export const Phone: LucideIcon;
+  export const Search: LucideIcon;
+  export const RefreshCw: LucideIcon;
+  export const Scale: LucideIcon;
+  export const Share2: LucideIcon;
+  export const ShieldCheck: LucideIcon;
+  export const SlidersHorizontal: LucideIcon;
+  export const Sun: LucideIcon;
+  export const TrendingUp: LucideIcon;
+  export const Target: LucideIcon;
+  export const Users: LucideIcon;
+  export const X: LucideIcon;
+}

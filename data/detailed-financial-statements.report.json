@@ -1,0 +1,58 @@
+{
+  "company_count": 9087,
+  "statement_count": 34020,
+  "complete_statement_count": 21069,
+  "simplified_statement_count": 12701,
+  "consolidated_statement_count": 250,
+  "partially_confidential_count": 7176,
+  "raw_cell_count": 2377454,
+  "earliest_valid_closing_date": "2011-12-31",
+  "latest_valid_closing_date": "2025-12-31",
+  "derived_metric_coverage": {
+    "balance_sheet_total": 33814,
+    "equity": 33871,
+    "provisions": 6379,
+    "financial_debt": 26586,
+    "total_debt": 33524,
+    "fixed_assets_gross": 20251,
+    "fixed_assets_net": 20251,
+    "current_assets_gross": 21210,
+    "current_assets_net": 21210,
+    "inventory_gross": 10775,
+    "inventory_net": 10775,
+    "trade_receivables_gross": 17651,
+    "trade_receivables_net": 17651,
+    "cash_and_securities_net": 20739,
+    "trade_payables": 30561,
+    "tax_social_debt": 31490,
+    "capital": 33835,
+    "revenue": 24691,
+    "operating_result": 26943,
+    "current_pre_tax_result": 26932,
+    "net_income": 32457,
+    "personnel_costs": 19170,
+    "external_purchases": 25697,
+    "taxes": 21968
+  },
+  "contains_personal_data": false,
+  "contains_documents": false,
+  "scope": "national_legal_unit",
+  "source_updated_at": "2026-02-10T09:26:01.275000+00:00",
+  "imported_at": "2026-07-19T04:37:46.061003+00:00",
+  "pipeline": {
+    "extract": {
+      "cache_hit": true,
+      "target_count": 109825,
+      "duration_seconds": 0.0
+    },
+    "parse": {
+      "source_rows": 34020,
+      "invalid_rows": 0,
+      "duplicate_rows": 0,
+      "conflicting_rows": 0,
+      "future_closing_date_rows": 0,
+      "raw_cell_count": 2377454,
+      "saturated_int32_cell_count": 3943
+    }
+  }
+}

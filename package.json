@@ -1,0 +1,24 @@
+{
+  "name": "guad-entreprises",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm --workspace apps/web run dev",
+    "start": "npm --workspace apps/web run start",
+    "build": "npm --workspace apps/web run build",
+    "lint": "npm --workspace apps/web run lint",
+    "typecheck": "npm --workspace apps/web run typecheck",
+    "test": "npm --workspace apps/web run test",
+    "test:e2e": "npm --workspace apps/web run test:e2e",
+    "deploy:vps": "node scripts/deploy-vps.mjs"
+  },
+  "overrides": {
+    "postcss": "8.5.19",
+    "next": {
+      "postcss": "8.5.19"
+    }
+  }
+}

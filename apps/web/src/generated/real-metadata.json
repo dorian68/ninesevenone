@@ -1,0 +1,8 @@
+{
+  "datasetName": "Stock SIRENE - établissements actifs de Guadeloupe",
+  "referenceDate": "2026-07-01",
+  "source": "Stocks SIRENE Etablissement et UniteLegale INSEE, enrichis par ODS SIRENE/BAN pour les coordonnées non restreintes manquantes.",
+  "establishmentCount": 129163,
+  "geolocatedCount": 115920,
+  "coverageNotice": "120 710 unités légales et 129 163 établissements actifs du stock INSEE du 1er juillet 2026 sont interrogeables; 115 920 positions sont publiables après application des statuts de diffusion. Les autres établissements restent accessibles par la recherche sans position artificielle."
+}

@@ -1,0 +1,66 @@
+{
+  "source_applicant_rows": 949226,
+  "matched_applicant_rows": 67263,
+  "restricted_rows_excluded": 3,
+  "company_count": 70,
+  "family_count": 19588,
+  "application_count": 66233,
+  "application_authority_count": 64,
+  "granted_family_count": 11223,
+  "international_family_count": 15178,
+  "titled_family_count": 19588,
+  "abstract_family_count": 19574,
+  "earliest_application_date": "2007-09-11",
+  "latest_application_date": "2024-10-14",
+  "technology_count": 136833,
+  "technology_section_count": 9,
+  "missing_application_records": 0,
+  "missing_family_records": 0,
+  "contains_inventor_records": false,
+  "contains_natural_person_applicants": false,
+  "join_uses_names": false,
+  "scope": "national_legal_unit",
+  "imported_at": "2026-07-19T02:47:21.338628+00:00",
+  "pipeline": {
+    "applicants": {
+      "rows_read": 949226,
+      "valid_siren_rows": 831609,
+      "invalid_siren_rows": 117617,
+      "matched_rows": 67263,
+      "restricted_rows": 3,
+      "inactive_company_rows": 0,
+      "invalid_application_rows": 0,
+      "invalid_family_rows": 0,
+      "deduplicated_rows": 66233
+    },
+    "applications_api": {
+      "value_count": 58135,
+      "record_count": 58135,
+      "api_calls": 969,
+      "api_retries": 0,
+      "cache_reused": false
+    },
+    "families_api": {
+      "value_count": 17258,
+      "record_count": 17258,
+      "api_calls": 288,
+      "api_retries": 0,
+      "cache_reused": false
+    },
+    "technologies_api": {
+      "value_count": 17258,
+      "record_count": 120359,
+      "api_calls": 1366,
+      "api_retries": 0,
+      "cache_reused": false
+    },
+    "portfolio": {
+      "missing_application_records": 0,
+      "missing_family_records": 0,
+      "family_count": 19588,
+      "application_count": 66233,
+      "technology_count": 136833
+    },
+    "applicant_csv_downloaded": true
+  }
+}

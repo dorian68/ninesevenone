@@ -1,0 +1,61 @@
+{
+  "source_row_count": 6542232,
+  "queried_company_count": 109825,
+  "company_count": 9281,
+  "exercise_count": 35009,
+  "complete_statement_count": 21563,
+  "simplified_statement_count": 13213,
+  "consolidated_statement_count": 233,
+  "partially_confidential_count": 7526,
+  "future_closing_date_count": 0,
+  "earliest_valid_closing_date": "2011-12-31",
+  "latest_valid_closing_date": "2026-02-28",
+  "metric_coverage": {
+    "chiffre_d_affaires": 35009,
+    "marge_brute": 35009,
+    "ebe": 35009,
+    "ebit": 35009,
+    "resultat_net": 35009,
+    "taux_d_endettement": 34974,
+    "ratio_de_liquidite": 34326,
+    "ratio_de_vetuste": 29940,
+    "autonomie_financiere": 34998,
+    "poids_bfr_exploitation_sur_ca": 25265,
+    "couverture_des_interets": 27705,
+    "caf_sur_ca": 25309,
+    "capacite_de_remboursement": 27726,
+    "marge_ebe": 25338,
+    "resultat_courant_avant_impots_sur_ca": 25338,
+    "poids_bfr_exploitation_sur_ca_jours": 25265,
+    "rotation_des_stocks_jours": 25265,
+    "credit_clients_jours": 25900,
+    "credit_fournisseurs_jours": 27096
+  },
+  "source_updated_at": "2026-06-01T15:27:20.326000+00:00",
+  "imported_at": "2026-07-19T04:10:40.212673+00:00",
+  "contains_personal_data": false,
+  "produces_credit_score": false,
+  "statement_types_are_blended": false,
+  "scope": "national_legal_unit",
+  "pipeline": {
+    "queried_company_count": 109825,
+    "query": {
+      "chunk_count": 733,
+      "calls": 0,
+      "retries": 0,
+      "cache_hits": 733,
+      "downloaded_chunks": 0
+    },
+    "parse": {
+      "source_rows": 35222,
+      "matched_rows": 35009,
+      "invalid_siren_rows": 0,
+      "out_of_scope_rows": 0,
+      "invalid_date_rows": 0,
+      "invalid_type_rows": 0,
+      "duplicate_rows": 213,
+      "conflicting_rows": 0,
+      "future_closing_date_rows": 0
+    }
+  }
+}

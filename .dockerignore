@@ -1,0 +1,17 @@
+.git
+.next
+node_modules
+**/*.sqlite*
+**/*.log
+**/*.tsbuildinfo
+.pytest-tmp*/
+**/.pytest-tmp*/
+**/pytest-*/
+**/subset.parquet
+.tmp-*
+.codex-*
+data/imports
+data/media
+test-results
+coverage
+playwright-report

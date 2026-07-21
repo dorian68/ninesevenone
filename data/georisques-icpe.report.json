@@ -1,0 +1,19 @@
+{
+  "installation_count": 329,
+  "company_count": 288,
+  "active_siret_count": 292,
+  "authorization_count": 80,
+  "registration_count": 54,
+  "seveso_count": 2,
+  "ied_count": 13,
+  "national_priority_count": 20,
+  "earliest_source_update": "1900-03-28T00:00:00Z",
+  "latest_source_update": "2026-07-17T19:32:59Z",
+  "inspection_count": 417,
+  "rubric_count": 258,
+  "other_document_count": 446,
+  "contains_source_person_names": false,
+  "downloads_documents": false,
+  "scope": "exact_siret_or_legal_unit_historical_siret",
+  "imported_at": "2026-07-19T07:52:03.722423+00:00"
+}

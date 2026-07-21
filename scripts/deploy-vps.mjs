@@ -106,6 +106,7 @@ remote(
 
 step(`Transfert de la release ${commit}`);
 run("git", ["archive", "--format=tar", "-o", archive, "HEAD"]);
+remote(`mkdir -p ${shellQuote(releaseDir)}`);
 if (!dryRun) run("scp", [...sshArgs, archive, `${config.host}:${releaseDir}/source.tar`]);
 else log(`[local] scp ${archive} -> ${config.host}:${releaseDir}/source.tar`);
 remote(`mkdir -p ${shellQuote(releaseDir)} && tar -xf ${shellQuote(`${releaseDir}/source.tar`)} -C ${shellQuote(releaseDir)} && rm -f ${shellQuote(`${releaseDir}/source.tar`)}`);

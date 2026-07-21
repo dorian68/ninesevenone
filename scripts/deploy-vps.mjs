@@ -120,7 +120,7 @@ remote(`install -m 0644 ${shellQuote(`${releaseDir}/docker-compose.vps.yml`)} ${
 step("Bascule du seul service GUAD");
 remote(`cd ${shellQuote(config.remoteDir)} && docker compose --env-file .env up -d --no-build`);
 const localHealth = remote(`for i in $(seq 1 30); do curl -fsS http://127.0.0.1:${config.port}/ >/dev/null && echo HEALTHY && exit 0; sleep 2; done; echo UNHEALTHY`, { capture: true });
-if (localHealth !== "HEALTHY") {
+if (!dryRun && localHealth !== "HEALTHY") {
   if (previousTag) {
     remote(`printf 'GUAD_IMAGE_TAG=%s\\nGUAD_BUILD_CONTEXT=%s\\n' ${shellQuote(previousTag)} ${shellQuote(`${config.remoteDir}/releases/${previousTag}`)} > ${shellQuote(`${config.remoteDir}/.env`)} && ` +
       `cd ${shellQuote(config.remoteDir)} && docker compose --env-file .env up -d --no-build`);

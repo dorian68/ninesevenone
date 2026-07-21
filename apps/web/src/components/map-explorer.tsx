@@ -4,6 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { Building2, ChevronDown, Crosshair, Database, ExternalLink, Filter, Layers3, List, MapPin, Moon, PanelLeftClose, PanelLeftOpen, Search, ShieldCheck, SlidersHorizontal, Sun, Users, X } from "lucide-react";
 import maplibregl, { Map, MapGeoJSONFeature } from "maplibre-gl";
 import Link from "next/link";
+import type { Route } from "next";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { activeDatasetKind, datasetMetadata, establishments } from "@/data/establishment-store";
 
@@ -801,7 +802,7 @@ function CompanyPanel({ entry, onClose, onCenter }: { entry: ExplorerEntry; onCl
         <h2 className="title" style={{ fontSize: "1.35rem", marginTop: 10 }}>{entry.name}</h2>
         {entry.legalName !== entry.name ? <p className="small muted">{entry.legalName}</p> : null}
         <p>{entry.description}</p>
-        <Link className="button primary" href={entry.url}>Fiche complète</Link>
+        <Link className="button primary" href={entry.url as Route}>Fiche complète</Link>
       </div>
       <div className="panel-section">
         <h3 className="title">Informations publiques</h3>
@@ -813,7 +814,7 @@ function CompanyPanel({ entry, onClose, onCenter }: { entry: ExplorerEntry; onCl
         <h3 className="title">Transparence</h3>
         <p className="small muted">Description factuelle générée automatiquement depuis le code NAF. Source publique non vérifiée par l&apos;établissement.</p>
         <div className="badge-row">
-          <Link className="button" href={`${entry.url}#transparence`}>Sources et corrections</Link>
+          <Link className="button" href={`${entry.url}#transparence` as Route}>Sources et corrections</Link>
           <button className="button" type="button" onClick={onCenter}><Crosshair size={15} /> Centrer</button>
         </div>
       </div>

@@ -12,6 +12,8 @@ services:
       PORT: 3000
     ports:
       - "127.0.0.1:3002:3000"
+    volumes:
+      - ${GUAD_DATA_DIR:-./data}/guadeloupe-enterprises.sqlite:/app/data/guadeloupe-enterprises.sqlite:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/ || exit 1"]
       interval: 15s

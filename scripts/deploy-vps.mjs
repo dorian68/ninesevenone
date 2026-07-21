@@ -12,6 +12,8 @@ const config = {
   publicHost: process.env.DEPLOY_PUBLIC_HOST ?? "guad.204.168.138.243.sslip.io",
   publicUrl: process.env.DEPLOY_PUBLIC_URL ?? "https://guad.204.168.138.243.sslip.io",
   port: process.env.DEPLOY_LOCAL_PORT ?? "3002",
+  localEnterpriseDb: resolve(process.cwd(), "data", "guadeloupe-enterprises.sqlite"),
+  remoteDataDir: process.env.DEPLOY_REMOTE_DATA_DIR ?? "/opt/guad-enterprises/data",
 };
 
 const args = process.argv.slice(2);
@@ -88,11 +90,15 @@ if (dirty && !allowDirty) fail("Arbre Git non propre. Commitez d'abord ou utilis
 run("npm", ["run", "typecheck"]);
 run("npm", ["run", "test"]);
 run("npm", ["run", "build"]);
+if (!existsSync(config.localEnterpriseDb) && !dryRun) fail(`Base SIRENE introuvable : ${config.localEnterpriseDb}`);
 ok("Contrôles locaux terminés");
 
 const commit = dryRun ? "<commit>" : gitShort();
 const releaseDir = `${config.remoteDir}/releases/${commit}`;
 const archive = resolve(process.cwd(), `.deploy-${commit}.tar`);
+const dataTempPath = `${config.remoteDataDir}/guadeloupe-enterprises.sqlite.${commit}.tmp`;
+const dataPath = `${config.remoteDataDir}/guadeloupe-enterprises.sqlite`;
+const dataBackupPath = `${config.remoteDataDir}/guadeloupe-enterprises.sqlite.bak-${commit}`;
 const previousTag = dryRun ? "<previous-tag>" : remote(`cat ${shellQuote(`${config.remoteDir}/ACTIVE_TAG`)} 2>/dev/null || true`, { capture: true });
 
 step("Préflight VPS non destructif");
@@ -112,18 +118,28 @@ else log(`[local] scp ${archive} -> ${config.host}:${releaseDir}/source.tar`);
 remote(`mkdir -p ${shellQuote(releaseDir)} && tar -xf ${shellQuote(`${releaseDir}/source.tar`)} -C ${shellQuote(releaseDir)} && rm -f ${shellQuote(`${releaseDir}/source.tar`)}`);
 if (!dryRun) rmSync(archive, { force: true });
 
+step("Transfert atomique de la base SIRENE");
+if (!dryRun) {
+  remote(`mkdir -p ${shellQuote(config.remoteDataDir)}`);
+  run("scp", [...sshArgs, config.localEnterpriseDb, `${config.host}:${dataTempPath}`]);
+  remote(`if [ -f ${shellQuote(dataPath)} ]; then cp -p ${shellQuote(dataPath)} ${shellQuote(dataBackupPath)}; fi; mv ${shellQuote(dataTempPath)} ${shellQuote(dataPath)}`);
+} else {
+  log(`[local] scp ${config.localEnterpriseDb} -> ${config.host}:${dataTempPath}`);
+  log(`[vps] sauvegarde de ${dataPath} puis remplacement atomique`);
+}
+
 step("Construction de l'image GUAD sur le VPS");
 remote(`docker build -t guad-enterprises-app:${shellQuote(commit)} ${shellQuote(releaseDir)}`);
 remote(`install -m 0644 ${shellQuote(`${releaseDir}/docker-compose.vps.yml`)} ${shellQuote(`${config.remoteDir}/docker-compose.yml`)} && ` +
   `touch ${shellQuote(`${config.remoteDir}/OWNER`)} && ` +
-  `printf 'GUAD_IMAGE_TAG=%s\\nGUAD_BUILD_CONTEXT=%s\\n' ${shellQuote(commit)} ${shellQuote(releaseDir)} > ${shellQuote(`${config.remoteDir}/.env`)}`);
+  `printf 'GUAD_IMAGE_TAG=%s\\nGUAD_BUILD_CONTEXT=%s\\nGUAD_DATA_DIR=%s\\n' ${shellQuote(commit)} ${shellQuote(releaseDir)} ${shellQuote(config.remoteDataDir)} > ${shellQuote(`${config.remoteDir}/.env`)}`);
 
 step("Bascule du seul service GUAD");
 remote(`cd ${shellQuote(config.remoteDir)} && docker compose --env-file .env up -d --no-build`);
 const localHealth = remote(`for i in $(seq 1 30); do curl -fsS http://127.0.0.1:${config.port}/ >/dev/null && echo HEALTHY && exit 0; sleep 2; done; echo UNHEALTHY`, { capture: true });
 if (!dryRun && localHealth !== "HEALTHY") {
   if (previousTag) {
-    remote(`printf 'GUAD_IMAGE_TAG=%s\\nGUAD_BUILD_CONTEXT=%s\\n' ${shellQuote(previousTag)} ${shellQuote(`${config.remoteDir}/releases/${previousTag}`)} > ${shellQuote(`${config.remoteDir}/.env`)} && ` +
+    remote(`printf 'GUAD_IMAGE_TAG=%s\\nGUAD_BUILD_CONTEXT=%s\\nGUAD_DATA_DIR=%s\\n' ${shellQuote(previousTag)} ${shellQuote(`${config.remoteDir}/releases/${previousTag}`)} ${shellQuote(config.remoteDataDir)} > ${shellQuote(`${config.remoteDir}/.env`)} && ` +
       `cd ${shellQuote(config.remoteDir)} && docker compose --env-file .env up -d --no-build`);
     fail(`Health-check GUAD KO; rollback vers ${previousTag} effectué.`);
   }

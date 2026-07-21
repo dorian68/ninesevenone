@@ -248,6 +248,7 @@ function fuzzyScore(rawQuery: string, row: EnterpriseRow) {
     row.sector,
     row.commune,
     row.naf_code,
+    getNafLabel(row.naf_code),
     row.address
   ].filter(Boolean).join(" "));
   let score = 0;
@@ -325,6 +326,7 @@ function searchNaturalLanguageSector(db: DatabaseSync, rawQuery: string, limit: 
   });
   const matchingNafCodes = findNafCodesForTerms(terms);
   if (!matchingSectors.length && !matchingNafCodes.length) return null;
+  const anchor = terms[0]?.slice(0, 3) ?? "";
 
   const clauses: string[] = [];
   const values: Array<string | number> = [];
@@ -336,13 +338,22 @@ function searchNaturalLanguageSector(db: DatabaseSync, rawQuery: string, limit: 
     clauses.push(`upper(naf_code) IN (${matchingNafCodes.map(() => "?").join(",")})`);
     values.push(...matchingNafCodes.map((code) => code.toUpperCase()));
   }
+  const candidateLimit = Math.min(Math.max(limit * 20, 240), 1000);
   const rows = db.prepare(
     `SELECT * FROM establishments
      WHERE ${clauses.join(" OR ")}
-     ORDER BY is_head_office DESC, legal_name, commune
+     ORDER BY CASE
+       WHEN lower(coalesce(legal_name, '')) LIKE '%' || ? || '%'
+         OR lower(coalesce(trade_name, '')) LIKE '%' || ? || '%' THEN 0
+       ELSE 1
+     END, legal_name, commune
      LIMIT ?`
-  ).all(...values, limit) as unknown as EnterpriseRow[];
-  return rows;
+  ).all(anchor, anchor, ...values, candidateLimit) as unknown as EnterpriseRow[];
+  return rows
+    .map((row) => ({ row, score: fuzzyScore(terms.join(" "), row) }))
+    .sort((left, right) => right.score - left.score || left.row.legal_name.localeCompare(right.row.legal_name, "fr"))
+    .slice(0, limit)
+    .map((item) => item.row);
 }
 
 export function searchEnterpriseDatabase(rawQuery: string, limit = 24) {

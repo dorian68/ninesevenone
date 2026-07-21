@@ -2,6 +2,7 @@
 
 import { BarChart3, Bookmark, Database, Download, FileText, Search, Target, X } from "lucide-react";
 import Link from "next/link";
+import type { Route } from "next";
 import { useEffect, useMemo, useState } from "react";
 import type { BusinessIntelligenceDossier, DossierEvidence } from "@/lib/business-intelligence-dossier-types";
 
@@ -501,7 +502,7 @@ export function StudioTools() {
           <div className="candidate-list" role="list">
             {candidates.map((candidate) => <article className="candidate-row" key={candidate.establishmentId} role="listitem">
               <div className="candidate-copy"><div className="candidate-heading"><h3>{candidate.name}</h3>{candidate.isHeadOffice ? <span className="badge">Siège</span> : null}</div><p className="small muted">{candidate.commune} · {candidate.sector} · NAF {candidate.nafCode}</p><p className="small">{candidate.description}</p><p className="small muted">SIREN {candidate.siren} · {candidate.workforceBand ?? "Effectif non renseigné"}</p></div>
-              <div className="candidate-actions"><button className="button" type="button" onClick={() => toggleCandidate(candidate)}>{selectedSirens.has(candidate.siren) ? "Retirer" : "Ajouter"}</button><button className="button" type="button" onClick={() => inspectCandidate(candidate)}><BarChart3 size={15} aria-hidden="true" /> {focusedCandidate?.siren === candidate.siren && insightLoading ? "Analyse…" : "BI"}</button><Link className="button" href={candidate.url}>Fiche <span aria-hidden="true">↗</span></Link></div>
+              <div className="candidate-actions"><button className="button" type="button" onClick={() => toggleCandidate(candidate)}>{selectedSirens.has(candidate.siren) ? "Retirer" : "Ajouter"}</button><button className="button" type="button" onClick={() => inspectCandidate(candidate)}><BarChart3 size={15} aria-hidden="true" /> {focusedCandidate?.siren === candidate.siren && insightLoading ? "Analyse…" : "BI"}</button><Link className="button" href={candidate.url as Route}>Fiche <span aria-hidden="true">↗</span></Link></div>
             </article>)}
             {!loading && !candidates.length ? <p className="empty-state">Aucun établissement correspondant dans l’index actif. Élargissez la commune ou la recherche.</p> : null}
           </div>
@@ -580,7 +581,7 @@ export function StudioTools() {
                   </details>
                 </div>
               </section> : null}
-              <div className="candidate-actions"><button className="button primary" type="button" onClick={() => targetProposal(focusedCandidate)}><FileText size={15} aria-hidden="true" /> Proposition</button><button className="button" type="button" onClick={() => targetCv(focusedCandidate)}><FileText size={15} aria-hidden="true" /> Cibler le CV</button><Link className="button" href={focusedCandidate.url}>Fiche ↗</Link></div>
+              <div className="candidate-actions"><button className="button primary" type="button" onClick={() => targetProposal(focusedCandidate)}><FileText size={15} aria-hidden="true" /> Proposition</button><button className="button" type="button" onClick={() => targetCv(focusedCandidate)}><FileText size={15} aria-hidden="true" /> Cibler le CV</button><Link className="button" href={focusedCandidate.url as Route}>Fiche ↗</Link></div>
             </> : null}
           </div> : null}
         </aside>

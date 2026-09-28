@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -14,6 +15,7 @@ import {
   Mail,
   MapPin,
   MessageSquareText,
+  Network,
   Phone,
   Plus,
   Save,
@@ -679,6 +681,7 @@ export function ProspectCrmDrawer({ prospect: row, trackingId, initialTab, initi
               <button id="prospect-tab-record" type="button" role="tab" aria-selected={tab === "record"} aria-controls="prospect-panel-record" tabIndex={tab === "record" ? 0 : -1} className={tab === "record" ? styles.activeTab : ""} onClick={() => setTab("record")}><Building2 size={17} aria-hidden="true" /> Fiche entreprise</button>
               <button id="prospect-tab-activity" type="button" role="tab" aria-selected={tab === "activity"} aria-controls="prospect-panel-activity" tabIndex={tab === "activity" ? 0 : -1} className={tab === "activity" ? styles.activeTab : ""} onClick={() => setTab("activity")}><Activity size={17} aria-hidden="true" /> Activité <span>{activities.length}</span></button>
             </nav>
+            {effectiveTrackingId ? <Link className={styles.mapLink} href={`/prospects/cartographie/${encodeURIComponent(effectiveTrackingId)}`}><Network size={16} aria-hidden="true" /> Ouvrir la cartographie <ExternalLink size={13} aria-hidden="true" /></Link> : null}
           </aside>
 
           <div className={styles.main}>

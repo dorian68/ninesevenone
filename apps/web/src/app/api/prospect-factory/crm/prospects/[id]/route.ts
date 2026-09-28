@@ -43,6 +43,7 @@ const qualificationSchema = z.object({
   priority: z.enum(PROSPECT_PRIORITIES).optional(),
   tags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
   notes: z.string().max(20_000).optional(),
+  nextActionLabel: nullableText(500).optional(),
   nextActionAt: z.string().datetime({ offset: true }).nullable().optional(),
   lastContactedAt: z.string().datetime({ offset: true }).nullable().optional(),
   owner: nullableText(180).optional(),

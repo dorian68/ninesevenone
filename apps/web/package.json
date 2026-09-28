@@ -12,7 +12,9 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@duckdb/node-api": "^1.5.5-r.4",
     "@types/geojson": "^7946.0.16",
+    "@xyflow/react": "^12.12.0",
     "clsx": "^2.1.1",
     "fast-xml-parser": "^5.10.1",
     "lucide-react": "^0.468.0",

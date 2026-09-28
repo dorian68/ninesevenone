@@ -107,6 +107,10 @@
 .tabs button:hover { color: #2946a8; background: #f0f3ff; }
 .tabs button span { min-width: 20px; margin-left: auto; padding: 2px 5px; border-radius: 10px; color: #2946a8; background: #e8edff; font-size: .61rem; text-align: center; }
 .tabs .activeTab { border-color: #d4dcff; color: #2946a8; background: #e9eeff; }
+.mapLink { min-height: 39px; padding: 8px 11px; display: flex; align-items: center; gap: 8px; border: 1px solid #d4dcff; border-radius: 9px; color: #2946a8; background: #f0f3ff; font-size: .73rem; font-weight: 760; text-decoration: none; }
+.mapLink svg:last-child { margin-left: auto; }
+.mapLink:hover { background: #e8edff; }
+.mapLink:focus-visible { outline: 3px solid #8196ef; outline-offset: 2px; }
 
 .content { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
 .panel { padding: 24px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 16px; }

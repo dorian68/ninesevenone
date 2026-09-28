@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 export const ADMIN_COOKIE = "guad_admin_session";
@@ -39,9 +39,9 @@ function readSession(value: string | undefined) {
   const [payload, signature] = value.split(".");
   if (!payload || !signature || !equalSecret(signature, sign(payload) ?? "")) return null;
   try {
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { role?: AdminRole; exp?: number };
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { role?: AdminRole; exp?: number; nonce?: string };
     if (!data.role || !["SUPER_ADMIN", "DATA_ADMIN", "MODERATOR"].includes(data.role) || !data.exp || data.exp <= Math.floor(Date.now() / 1000)) return null;
-    return { role: data.role };
+    return { role: data.role, nonce: data.nonce ?? null };
   } catch {
     return null;
   }
@@ -61,7 +61,20 @@ export function authenticateAdminToken(value: string | undefined) {
 
 export function getAdminAuth(request: NextRequest) {
   const header = request.headers.get("x-admin-token") ?? request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  return authenticateAdminToken(header) ?? readSession(request.cookies.get(ADMIN_COOKIE)?.value);
+  const tokenAuth = authenticateAdminToken(header);
+  if (tokenAuth) return tokenAuth;
+  const session = readSession(request.cookies.get(ADMIN_COOKIE)?.value);
+  return session ? { role: session.role } : null;
+}
+
+/** Pseudonymous credential/session identifier for audit logs, never the secret itself. */
+export function getAdminActorId(request: NextRequest): string | null {
+  const header = request.headers.get("x-admin-token") ?? request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  if (authenticateAdminToken(header) && header) {
+    return `credential:${createHash("sha256").update(header).digest("hex").slice(0, 24)}`;
+  }
+  const session = readSession(request.cookies.get(ADMIN_COOKIE)?.value);
+  return session?.nonce ? `session:${session.nonce}` : null;
 }
 
 export function attachAdminSession(response: NextResponse, role: AdminRole) {

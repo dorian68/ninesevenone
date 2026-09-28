@@ -7,6 +7,7 @@ import type { ProspectFactoryFacetOption, ProspectFactoryFacetsResponse, Prospec
 import type { ProspectActivityStats, ProspectPipelineCounts, ProspectPriority, ProspectQualificationConfidence, ProspectQualificationStatus, ProspectQualificationTier, TrackedProspect } from "@/lib/prospect-factory-crm-contract";
 import { ProspectCrmDrawer } from "./prospect-crm-drawer";
 import { MarketView } from "./market-view";
+import { AccountMapWorkspace } from "./account-map";
 import styles from "./prospect-factory.module.css";
 
 type OverviewResponse = {
@@ -412,7 +413,7 @@ export function ProspectFactory() {
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [trackingStatsError, setTrackingStatsError] = useState<string | null>(null);
   const [trackingStatus, setTrackingStatus] = useState<ProspectQualificationStatus | "">("");
-  const [trackingViewMode, setTrackingViewMode] = useState<"rows" | "kanban" | "market">("market");
+  const [trackingViewMode, setTrackingViewMode] = useState<"rows" | "kanban" | "market" | "map">("market");
   const [marketRefreshToken, setMarketRefreshToken] = useState(0);
   const [trackingPriority, setTrackingPriority] = useState<ProspectPriority | "">("");
   const [trackingDraftFilters, setTrackingDraftFilters] = useState<ProspectFactoryFilters>({});
@@ -616,7 +617,7 @@ export function ProspectFactory() {
     setTrackingOffset(0);
   };
 
-  const changeTrackingView = (nextView: "rows" | "kanban" | "market") => {
+  const changeTrackingView = (nextView: "rows" | "kanban" | "market" | "map") => {
     if (nextView === "kanban" && trackingStatus) {
       setTrackingStatus("");
       setTrackingOffset(0);
@@ -862,11 +863,12 @@ export function ProspectFactory() {
       {view === "tracking" ? <section className={styles.trackingPage}>
         <header className={styles.pageHeading}><div><span>Espace de travail</span><h1>Suivi commercial <em>{number.format(tracking?.counts.total ?? 0)} prospects</em></h1></div><div className={styles.pageHeadingActions}><button type="button" className={styles.primary} onClick={() => setManualProspectOpen(true)}><Users size={16} /> Ajouter un prospect</button><button type="button" className={styles.refreshTracking} onClick={refreshCrm} disabled={trackingLoading} aria-label="Actualiser le suivi"><RefreshCw className={trackingLoading ? styles.spin : ""} size={16} /><span>Actualiser</span></button></div></header>
         <div className={styles.trackingViewBar}>
-          <div><strong>Mes prospects</strong><span>{trackingViewMode === "rows" ? "Liste détaillée" : trackingViewMode === "kanban" ? "Pipeline par étape commerciale" : "ICP, segments et comptes"}</span></div>
+          <div><strong>Mes prospects</strong><span>{trackingViewMode === "rows" ? "Liste détaillée" : trackingViewMode === "kanban" ? "Pipeline par étape commerciale" : trackingViewMode === "market" ? "ICP, segments et comptes" : "Organisation et décision par compte"}</span></div>
           <div className={styles.trackingViewSwitch} role="group" aria-label="Choisir la présentation du suivi commercial">
             <button type="button" aria-pressed={trackingViewMode === "rows"} onClick={() => changeTrackingView("rows")}>Liste</button>
             <button type="button" aria-pressed={trackingViewMode === "kanban"} onClick={() => changeTrackingView("kanban")}>Kanban</button>
             <button type="button" aria-pressed={trackingViewMode === "market"} onClick={() => changeTrackingView("market")}>Vue Marché</button>
+            <button type="button" aria-pressed={trackingViewMode === "map"} onClick={() => changeTrackingView("map")}>Cartographie</button>
           </div>
         </div>
         <details className={styles.trackingInsights}>
@@ -902,7 +904,7 @@ export function ProspectFactory() {
         </div>
           </div>
         </details>
-        {trackingViewMode === "market" ? <MarketView onOpenProspect={(prospect, tab, contactId) => { setSelectedProspectTab(tab); setSelectedActivityContactId(contactId ?? null); setSelectedProspect(trackedToFactoryRow(prospect)); }} refreshToken={marketRefreshToken} /> : <>
+        {trackingViewMode === "market" ? <MarketView onOpenProspect={(prospect, tab, contactId) => { setSelectedProspectTab(tab); setSelectedActivityContactId(contactId ?? null); setSelectedProspect(trackedToFactoryRow(prospect)); }} refreshToken={marketRefreshToken} /> : trackingViewMode === "map" ? <AccountMapWorkspace /> : <>
         {trackingViewMode === "rows" ? <div className={styles.stageRail} aria-label="Filtrer par étape commerciale">
           <button type="button" className={!trackingStatus ? styles.activeStage : ""} onClick={() => { setTrackingStatus(""); setTrackingOffset(0); }}>Toutes <span>{tracking?.counts.total ?? 0}</span></button>
           {(Object.keys(qualificationLabels) as ProspectQualificationStatus[]).map((status) => <button type="button" key={status} className={trackingStatus === status ? styles.activeStage : ""} onClick={() => { setTrackingStatus(status); setTrackingOffset(0); }}>{qualificationLabels[status]} <span>{tracking?.counts.byStatus[status] ?? 0}</span></button>)}

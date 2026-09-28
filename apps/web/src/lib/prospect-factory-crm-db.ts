@@ -842,7 +842,284 @@ function getDatabase() {
       throw error;
     }
   }
+  // Account maps extend the CRM; they do not replace or rewrite prospect,
+  // contact, activity, or pipeline records. Keep the migration additive.
+  if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 6) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_opportunities (
+          id TEXT PRIMARY KEY,
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS prospect_factory_map_opportunities_account_idx
+          ON prospect_factory_map_opportunities(prospect_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_nodes (
+          id TEXT PRIMARY KEY,
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('person','unit','role_slot')),
+          contact_id TEXT REFERENCES prospect_factory_contacts(id) ON DELETE CASCADE,
+          unit_kind TEXT CHECK(unit_kind IS NULL OR unit_kind IN ('account','group','company','headquarters','subsidiary','establishment','department','external')),
+          is_root INTEGER NOT NULL DEFAULT 0 CHECK(is_root IN (0,1)),
+          name TEXT NOT NULL,
+          title TEXT,
+          notes TEXT NOT NULL DEFAULT '',
+          opportunity_id TEXT REFERENCES prospect_factory_map_opportunities(id) ON DELETE CASCADE,
+          resolved_contact_id TEXT REFERENCES prospect_factory_contacts(id) ON DELETE SET NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK((kind='person' AND contact_id IS NOT NULL AND unit_kind IS NULL AND is_root=0 AND opportunity_id IS NULL)
+             OR (kind='unit' AND contact_id IS NULL AND unit_kind IS NOT NULL AND resolved_contact_id IS NULL AND opportunity_id IS NULL)
+             OR (kind='role_slot' AND contact_id IS NULL AND unit_kind IS NULL AND is_root=0))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS prospect_factory_map_person_unique_idx
+          ON prospect_factory_map_nodes(prospect_id, contact_id) WHERE kind='person';
+        CREATE UNIQUE INDEX IF NOT EXISTS prospect_factory_map_root_unique_idx
+          ON prospect_factory_map_nodes(prospect_id) WHERE is_root=1;
+        CREATE INDEX IF NOT EXISTS prospect_factory_map_nodes_account_idx
+          ON prospect_factory_map_nodes(prospect_id, kind, name COLLATE NOCASE);
+
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_sources (
+          id TEXT PRIMARY KEY,
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('screenshot','document','meeting_note','web_page','crm_note','other')),
+          label TEXT NOT NULL,
+          reference TEXT,
+          collected_at TEXT,
+          information_date TEXT,
+          locator TEXT,
+          excerpt TEXT,
+          retention_until TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS prospect_factory_map_sources_account_idx
+          ON prospect_factory_map_sources(prospect_id, collected_at DESC);
+
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_relations (
+          id TEXT PRIMARY KEY,
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          from_node_id TEXT NOT NULL REFERENCES prospect_factory_map_nodes(id) ON DELETE CASCADE,
+          to_node_id TEXT NOT NULL REFERENCES prospect_factory_map_nodes(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('works_in','reports_to','functional_reports_to','part_of','can_introduce','advises')),
+          opportunity_id TEXT REFERENCES prospect_factory_map_opportunities(id) ON DELETE CASCADE,
+          evidence_status TEXT NOT NULL DEFAULT 'hypothesis' CHECK(evidence_status IN ('observed','confirmed','hypothesis','contradictory','obsolete')),
+          source_id TEXT REFERENCES prospect_factory_map_sources(id) ON DELETE SET NULL,
+          source_ids_json TEXT NOT NULL DEFAULT '[]',
+          label TEXT,
+          notes TEXT NOT NULL DEFAULT '',
+          locator TEXT,
+          excerpt TEXT,
+          justification TEXT,
+          verification_question TEXT,
+          validated_by TEXT,
+          validated_at TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK(from_node_id <> to_node_id)
+        );
+        CREATE INDEX IF NOT EXISTS prospect_factory_map_relations_account_idx
+          ON prospect_factory_map_relations(prospect_id, opportunity_id, kind);
+
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_claims (
+          id TEXT PRIMARY KEY,
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          subject_node_id TEXT NOT NULL REFERENCES prospect_factory_map_nodes(id) ON DELETE CASCADE,
+          opportunity_id TEXT REFERENCES prospect_factory_map_opportunities(id) ON DELETE CASCADE,
+          field TEXT NOT NULL,
+          value_json TEXT NOT NULL,
+          evidence_status TEXT NOT NULL CHECK(evidence_status IN ('observed','confirmed','hypothesis','contradictory','obsolete')),
+          source_id TEXT REFERENCES prospect_factory_map_sources(id) ON DELETE SET NULL,
+          source_ids_json TEXT NOT NULL DEFAULT '[]',
+          locator TEXT,
+          excerpt TEXT,
+          justification TEXT,
+          verification_question TEXT,
+          information_date TEXT,
+          validated_by TEXT,
+          validated_at TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS prospect_factory_map_claims_account_idx
+          ON prospect_factory_map_claims(prospect_id, subject_node_id);
+
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_evidence_sources (
+          id TEXT PRIMARY KEY,
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          subject_kind TEXT NOT NULL CHECK(subject_kind IN ('relation','claim','stakeholder_role')),
+          subject_id TEXT NOT NULL,
+          source_id TEXT NOT NULL REFERENCES prospect_factory_map_sources(id) ON DELETE CASCADE,
+          locator TEXT,
+          excerpt TEXT,
+          UNIQUE(subject_kind, subject_id, source_id)
+        );
+        CREATE INDEX IF NOT EXISTS prospect_factory_map_evidence_subject_idx
+          ON prospect_factory_map_evidence_sources(prospect_id, subject_kind, subject_id);
+
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_stakeholder_roles (
+          id TEXT PRIMARY KEY,
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          opportunity_id TEXT NOT NULL REFERENCES prospect_factory_map_opportunities(id) ON DELETE CASCADE,
+          person_node_id TEXT NOT NULL REFERENCES prospect_factory_map_nodes(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK(role IN ('user','process_owner','influencer','potential_relay','confirmed_champion','economic_decision_maker','technical_validator','security_validator','procurement','access_facilitator','unknown')),
+          evidence_status TEXT NOT NULL CHECK(evidence_status IN ('observed','confirmed','hypothesis','contradictory','obsolete')),
+          source_id TEXT REFERENCES prospect_factory_map_sources(id) ON DELETE SET NULL,
+          source_ids_json TEXT NOT NULL DEFAULT '[]',
+          notes TEXT NOT NULL DEFAULT '',
+          validated_by TEXT,
+          validated_at TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK(role <> 'confirmed_champion' OR evidence_status='confirmed'),
+          UNIQUE(opportunity_id, person_node_id, role)
+        );
+        CREATE INDEX IF NOT EXISTS prospect_factory_map_roles_account_idx
+          ON prospect_factory_map_stakeholder_roles(prospect_id, opportunity_id);
+
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_questions (
+          id TEXT PRIMARY KEY,
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          subject_node_id TEXT REFERENCES prospect_factory_map_nodes(id) ON DELETE SET NULL,
+          opportunity_id TEXT REFERENCES prospect_factory_map_opportunities(id) ON DELETE CASCADE,
+          question TEXT NOT NULL,
+          next_action TEXT,
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','answered','dismissed')),
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS prospect_factory_map_questions_account_idx
+          ON prospect_factory_map_questions(prospect_id, status);
+
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_layouts (
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          view TEXT NOT NULL CHECK(view IN ('organization','decision')),
+          opportunity_key TEXT NOT NULL DEFAULT '',
+          node_id TEXT NOT NULL REFERENCES prospect_factory_map_nodes(id) ON DELETE CASCADE,
+          x REAL NOT NULL,
+          y REAL NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(prospect_id, view, opportunity_key, node_id)
+        );
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_viewports (
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          view TEXT NOT NULL CHECK(view IN ('organization','decision')),
+          opportunity_key TEXT NOT NULL DEFAULT '',
+          x REAL NOT NULL,
+          y REAL NOT NULL,
+          zoom REAL NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(prospect_id, view, opportunity_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_import_batches (
+          id TEXT PRIMARY KEY,
+          prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+          payload_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('applied','undone')),
+          applied_at TEXT NOT NULL,
+          applied_by TEXT NOT NULL,
+          undone_at TEXT,
+          undone_by TEXT
+        );
+        CREATE TABLE IF NOT EXISTS prospect_factory_map_import_changes (
+          id TEXT PRIMARY KEY,
+          batch_id TEXT NOT NULL REFERENCES prospect_factory_map_import_batches(id) ON DELETE CASCADE,
+          entity_table TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          before_json TEXT,
+          after_json TEXT,
+          applied_version TEXT,
+          undone_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS prospect_factory_map_import_changes_batch_idx
+          ON prospect_factory_map_import_changes(batch_id);
+
+        CREATE TRIGGER IF NOT EXISTS prospect_factory_map_nodes_scope_insert
+        BEFORE INSERT ON prospect_factory_map_nodes
+        WHEN (NEW.contact_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_contacts c WHERE c.id=NEW.contact_id AND c.prospect_id=NEW.prospect_id))
+          OR (NEW.resolved_contact_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_contacts c WHERE c.id=NEW.resolved_contact_id AND c.prospect_id=NEW.prospect_id))
+          OR (NEW.opportunity_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_map_opportunities o WHERE o.id=NEW.opportunity_id AND o.prospect_id=NEW.prospect_id))
+        BEGIN SELECT RAISE(ABORT, 'account_map_cross_account_reference'); END;
+        CREATE TRIGGER IF NOT EXISTS prospect_factory_map_nodes_scope_update
+        BEFORE UPDATE ON prospect_factory_map_nodes
+        WHEN (NEW.contact_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_contacts c WHERE c.id=NEW.contact_id AND c.prospect_id=NEW.prospect_id))
+          OR (NEW.resolved_contact_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_contacts c WHERE c.id=NEW.resolved_contact_id AND c.prospect_id=NEW.prospect_id))
+          OR (NEW.opportunity_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_map_opportunities o WHERE o.id=NEW.opportunity_id AND o.prospect_id=NEW.prospect_id))
+        BEGIN SELECT RAISE(ABORT, 'account_map_cross_account_reference'); END;
+        CREATE TRIGGER IF NOT EXISTS prospect_factory_map_relations_scope_insert
+        BEFORE INSERT ON prospect_factory_map_relations
+        WHEN NOT EXISTS (SELECT 1 FROM prospect_factory_map_nodes n WHERE n.id=NEW.from_node_id AND n.prospect_id=NEW.prospect_id)
+          OR NOT EXISTS (SELECT 1 FROM prospect_factory_map_nodes n WHERE n.id=NEW.to_node_id AND n.prospect_id=NEW.prospect_id)
+          OR (NEW.opportunity_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_map_opportunities o WHERE o.id=NEW.opportunity_id AND o.prospect_id=NEW.prospect_id))
+          OR (NEW.source_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_map_sources s WHERE s.id=NEW.source_id AND s.prospect_id=NEW.prospect_id))
+        BEGIN SELECT RAISE(ABORT, 'account_map_cross_account_reference'); END;
+        CREATE TRIGGER IF NOT EXISTS prospect_factory_map_relations_scope_update
+        BEFORE UPDATE ON prospect_factory_map_relations
+        WHEN NOT EXISTS (SELECT 1 FROM prospect_factory_map_nodes n WHERE n.id=NEW.from_node_id AND n.prospect_id=NEW.prospect_id)
+          OR NOT EXISTS (SELECT 1 FROM prospect_factory_map_nodes n WHERE n.id=NEW.to_node_id AND n.prospect_id=NEW.prospect_id)
+          OR (NEW.opportunity_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_map_opportunities o WHERE o.id=NEW.opportunity_id AND o.prospect_id=NEW.prospect_id))
+          OR (NEW.source_id IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_map_sources s WHERE s.id=NEW.source_id AND s.prospect_id=NEW.prospect_id))
+        BEGIN SELECT RAISE(ABORT, 'account_map_cross_account_reference'); END;
+        CREATE TRIGGER IF NOT EXISTS prospect_factory_map_evidence_scope_insert
+        BEFORE INSERT ON prospect_factory_map_evidence_sources
+        WHEN NOT EXISTS (SELECT 1 FROM prospect_factory_map_sources s WHERE s.id=NEW.source_id AND s.prospect_id=NEW.prospect_id)
+          OR (NEW.subject_kind='relation' AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_map_relations r WHERE r.id=NEW.subject_id AND r.prospect_id=NEW.prospect_id))
+          OR (NEW.subject_kind='claim' AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_map_claims c WHERE c.id=NEW.subject_id AND c.prospect_id=NEW.prospect_id))
+          OR (NEW.subject_kind='stakeholder_role' AND NOT EXISTS
+                (SELECT 1 FROM prospect_factory_map_stakeholder_roles r WHERE r.id=NEW.subject_id AND r.prospect_id=NEW.prospect_id))
+        BEGIN SELECT RAISE(ABORT, 'account_map_cross_account_reference'); END;
+        CREATE TRIGGER IF NOT EXISTS prospect_factory_map_relations_evidence_delete
+        AFTER DELETE ON prospect_factory_map_relations
+        BEGIN DELETE FROM prospect_factory_map_evidence_sources
+          WHERE subject_kind='relation' AND subject_id=OLD.id; END;
+        CREATE TRIGGER IF NOT EXISTS prospect_factory_map_claims_evidence_delete
+        AFTER DELETE ON prospect_factory_map_claims
+        BEGIN DELETE FROM prospect_factory_map_evidence_sources
+          WHERE subject_kind='claim' AND subject_id=OLD.id; END;
+        CREATE TRIGGER IF NOT EXISTS prospect_factory_map_roles_evidence_delete
+        AFTER DELETE ON prospect_factory_map_stakeholder_roles
+        BEGIN DELETE FROM prospect_factory_map_evidence_sources
+          WHERE subject_kind='stakeholder_role' AND subject_id=OLD.id; END;
+      `);
+      db.exec("PRAGMA user_version = 6");
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   return db;
+}
+
+/** Share the initialized CRM SQLite connection with account-map services. */
+export function withAccountMapDatabase<T>(fn: (db: DatabaseSync) => T): T {
+  return fn(getDatabase());
 }
 
 function seedInitialMarket(db: DatabaseSync) {
@@ -3374,13 +3651,14 @@ function validateProspectContactWrite(input: ProspectContactWriteInput) {
   }
 }
 
-function assertNoDuplicateContact(db: DatabaseSync, prospectId: string, name: string, email: string | null, exceptId?: string) {
+function assertNoDuplicateContact(db: DatabaseSync, prospectId: string, email: string | null, linkedin: string | null, exceptId?: string) {
+  if (!email?.trim() && !linkedin?.trim()) return;
   const duplicate = db.prepare(`
     SELECT id FROM prospect_factory_contacts WHERE prospect_id=? AND id<>?
-      AND (LOWER(TRIM(name))=LOWER(TRIM(?))
-        OR (? IS NOT NULL AND LOWER(TRIM(COALESCE(email,'')))=LOWER(TRIM(?)))) LIMIT 1
-  `).get(prospectId, exceptId ?? "", name, email, email);
-  if (duplicate) throw new ProspectCrmInputError("name", "A contact with this name or email already exists on the account.");
+      AND ((? IS NOT NULL AND LOWER(TRIM(COALESCE(email,'')))=LOWER(TRIM(?)))
+        OR (? IS NOT NULL AND LOWER(TRIM(RTRIM(COALESCE(linkedin,''),'/')))=LOWER(TRIM(RTRIM(?,'/'))))) LIMIT 1
+  `).get(prospectId, exceptId ?? "", email, email, linkedin, linkedin);
+  if (duplicate) throw new ProspectCrmInputError("email", "Un contact avec cet email ou cette URL LinkedIn existe déjà sur le compte.");
 }
 
 function touchAccountForContact(db: DatabaseSync, prospectId: string, eventType: "contact_added" | "enrichment_updated", subject: string) {
@@ -3415,7 +3693,7 @@ export function createProspectContact(prospectId: string, input: ProspectContact
   const legacy = prospect.legacyContact?.name.toLocaleLowerCase() === input.name.trim().toLocaleLowerCase()
     ? prospect.legacyContact : null;
   const email = input.email === undefined ? legacy?.email ?? null : input.email;
-  assertNoDuplicateContact(db, prospectId, input.name, email ?? null);
+  assertNoDuplicateContact(db, prospectId, email ?? null, input.linkedin ?? null);
   const id = randomUUID();
   const timestamp = now();
   db.exec("BEGIN IMMEDIATE");
@@ -3450,7 +3728,7 @@ export function updateProspectContact(
   const next: ProspectContactWriteInput = { ...current, ...patch };
   validateProspectContactWrite(next);
   const db = getDatabase();
-  assertNoDuplicateContact(db, prospectId, next.name, next.email ?? null, contactId);
+  assertNoDuplicateContact(db, prospectId, next.email ?? null, next.linkedin ?? null, contactId);
   const timestamp = now();
   db.exec("BEGIN IMMEDIATE");
   try {

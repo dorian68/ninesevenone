@@ -37,7 +37,14 @@ const fictionalImportExample = {
 const relationKinds = [
   ["works_in", "travaille dans"], ["reports_to", "dépend hiérarchiquement de"], ["functional_reports_to", "dépend fonctionnellement de"], ["part_of", "appartient à"], ["can_introduce", "peut présenter"], ["advises", "conseille"]
 ] as const;
-const knownKind = (kind: string) => relationKinds.find(([key]) => key === kind)?.[1] || kind.replaceAll("_", " ");
+const knownKind = (kind: string, fromKind?: MapNode["kind"]) => kind === "works_in" && fromKind === "role_slot"
+  ? "fonction recherchée dans" : relationKinds.find(([key]) => key === kind)?.[1] || kind.replaceAll("_", " ");
+function allowedRelationKinds(fromKind?: MapNode["kind"], toKind?: MapNode["kind"]) {
+  if ((fromKind === "person" || fromKind === "role_slot") && toKind === "unit") return ["works_in"];
+  if (fromKind === "unit" && toKind === "unit") return ["part_of"];
+  if (fromKind === "person" && toKind === "person") return ["reports_to", "functional_reports_to", "can_introduce", "advises"];
+  return [];
+}
 const claimText = (value: unknown) => typeof value === "string" ? value : JSON.stringify(value) || "Valeur non renseignée";
 function proposalForItem(document: Record<string, unknown> | null, item: ImportItem): unknown {
   if (!document) return null;
@@ -57,7 +64,8 @@ function proposalForItem(document: Record<string, unknown> | null, item: ImportI
   return indexed[prefix] ? list(indexed[prefix])[Number(index)] : null;
 }
 const defaultNodeDraft = (kind: MapNode["kind"]): NodeDraft => ({ kind, contactId: "", name: "", title: "", unitKind: "department", notes: "", resolvedContactId: "" });
-const defaultRelationDraft = (opportunityId: string | null): RelationDraft => ({ fromNodeId: "", toNodeId: "", kind: "works_in", label: "", evidenceStatus: "hypothesis", sourceId: "", opportunityId: opportunityId || "", notes: "", locator: "", excerpt: "", justification: "", verificationQuestion: "" });
+const defaultRelationDraft = (opportunityId: string | null): RelationDraft => ({ fromNodeId: "", toNodeId: "", kind: "", label: "", evidenceStatus: "hypothesis", sourceId: "", opportunityId: opportunityId || "", notes: "", locator: "", excerpt: "", justification: "", verificationQuestion: "" });
+const pendingRelationId = "pending-account-map-relation";
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...init });
   const result = await response.json().catch(() => null) as (T & { error?: string }) | null;
@@ -92,6 +100,8 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [orientationAdjusted, setOrientationAdjusted] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [view, setView] = useState<MapView>("organization");
   const [opportunityId, setOpportunityId] = useState<string | null>(null);
@@ -130,6 +140,7 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
   const [confirmationExcerpt, setConfirmationExcerpt] = useState("");
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingLinkRef = useRef(false);
   const importDialogRef = useRef<HTMLElement>(null);
   const inspectorRef = useRef<HTMLElement>(null);
 
@@ -179,11 +190,21 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
   }, [showImport]);
 
   const selectedOpportunity = map?.opportunities.find((item) => item.id === opportunityId) || null;
+  const hasUnsavedRelation = selection?.type === "relation" && !selection.id;
+  const relationFromKind = map?.nodes.find((node) => node.id === relationDraft.fromNodeId)?.kind;
+  const relationToKind = map?.nodes.find((node) => node.id === relationDraft.toNodeId)?.kind;
+  const relationKindChoices = allowedRelationKinds(relationFromKind, relationToKind);
+  const pendingRelationVisible = hasUnsavedRelation && relationDraft.fromNodeId && relationDraft.toNodeId
+    && relationDraft.fromNodeId !== relationDraft.toNodeId && relationKindChoices.length > 0;
   const visibleNodes = useMemo(() => {
     if (!map) return [];
     const needle = query.trim().toLocaleLowerCase("fr");
-    return map.nodes.filter((node) => (node.kind !== "role_slot" || node.opportunityId === null || (view === "decision" && node.opportunityId === opportunityId)) && (!kindFilter || node.kind === kindFilter) && (!needle || `${node.name} ${node.title || ""} ${node.notes || ""}`.toLocaleLowerCase("fr").includes(needle)));
-  }, [map, kindFilter, query, view, opportunityId]);
+    return map.nodes.filter((node) => {
+      const inContext = node.kind !== "role_slot" || node.opportunityId === null || (view === "decision" && node.opportunityId === opportunityId);
+      const draftEndpoint = pendingRelationVisible && (node.id === relationDraft.fromNodeId || node.id === relationDraft.toNodeId);
+      return inContext && (draftEndpoint || ((!kindFilter || node.kind === kindFilter) && (!needle || `${node.name} ${node.title || ""} ${node.notes || ""}`.toLocaleLowerCase("fr").includes(needle))));
+    });
+  }, [map, kindFilter, query, view, opportunityId, pendingRelationVisible, relationDraft.fromNodeId, relationDraft.toNodeId]);
   const visibleIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes]);
   const searchedNodeId = query.trim() ? visibleNodes[0]?.id || null : focusNodeId;
   const visibleRelations = useMemo(() => {
@@ -200,7 +221,8 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
     const resolvedContact = node.resolvedContactId ? map?.availableContacts.find((contact) => contact.id === node.resolvedContactId) : null;
     return { id: node.id, kind: node.kind, name: node.name, title: node.kind === "role_slot" && node.resolvedContactId ? `Contact lié : ${resolvedContact?.name || "fiche CRM"}` : role ? `${node.title || ""}${node.title ? " · " : ""}${stakeholderLabels[role.role]}` : node.title, unitKind: node.unitKind, status: node.kind === "role_slot" ? node.resolvedContactId ? "Identifiée" : "À identifier" : null, position: local || (layout ? { x: layout.x, y: layout.y } : stableNodePositions.get(node.id) || autoPosition(0)) };
   }), [visibleNodes, map, view, opportunityId, positions, stableNodePositions]);
-  const canvasEdges = useMemo<MapCanvasEdge[]>(() => visibleRelations.map((relation) => ({ id: relation.id, source: relation.fromNodeId, target: relation.toNodeId, kind: relation.kind, label: `${relation.label || knownKind(relation.kind)} · ${statusLabels[relation.evidenceStatus]}`, status: relation.evidenceStatus })), [visibleRelations]);
+  const canvasEdges: MapCanvasEdge[] = visibleRelations.map((relation) => ({ id: relation.id, source: relation.fromNodeId, target: relation.toNodeId, kind: relation.kind, label: `${relation.label || knownKind(relation.kind, map?.nodes.find((node) => node.id === relation.fromNodeId)?.kind)} · ${statusLabels[relation.evidenceStatus]}`, status: relation.evidenceStatus }));
+  if (pendingRelationVisible && visibleIds.has(relationDraft.fromNodeId) && visibleIds.has(relationDraft.toNodeId)) canvasEdges.push({ id: pendingRelationId, source: relationDraft.fromNodeId, target: relationDraft.toNodeId, kind: relationDraft.kind, label: `${relationDraft.label.trim() || (relationDraft.kind ? knownKind(relationDraft.kind, relationFromKind) : "Type à choisir")} · non enregistré`, status: "pending" });
   const contextViewport = map?.layouts.find((row) => sameContext(row, view, opportunityId))?.viewport;
   const currentNode = selection?.type === "node" && selection.id ? map?.nodes.find((node) => node.id === selection.id) : null;
   const currentRelation = selection?.type === "relation" && selection.id ? map?.relations.find((relation) => relation.id === selection.id) : null;
@@ -209,17 +231,58 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
   const unusedContacts = map?.availableContacts.filter((contact) => !map.nodes.some((node) => node.kind === "person" && node.contactId === contact.id)) || [];
 
   function chooseNode(node: MapNode) {
+    if (pendingLinkRef.current || hasUnsavedRelation) { setError("Ce lien n’est pas encore enregistré. Enregistrez-le ou annulez-le dans l’éditeur avant de sélectionner un autre élément."); return; }
     setSelection({ type: "node", id: node.id }); setFocusNodeId(node.id);
     setConfirmationSourceId(""); setConfirmationNote(""); setConfirmationLocator(""); setConfirmationExcerpt("");
     setNodeDraft({ kind: node.kind, contactId: node.contactId || "", name: node.name, title: node.title || "", unitKind: node.unitKind || "department", notes: node.notes || "", resolvedContactId: node.resolvedContactId || "" });
   }
   function chooseRelation(relation: MapRelation) {
+    if (pendingLinkRef.current || hasUnsavedRelation) { setError("Ce lien n’est pas encore enregistré. Enregistrez-le ou annulez-le avant d’ouvrir un autre lien."); return; }
     setSelection({ type: "relation", id: relation.id });
     setRelationDraft({ fromNodeId: relation.fromNodeId, toNodeId: relation.toNodeId, kind: relation.kind, label: relation.label || "", evidenceStatus: relation.evidenceStatus, sourceId: relation.sourceId || "", opportunityId: relation.opportunityId || "", notes: relation.notes || "", locator: relation.locator || "", excerpt: relation.excerpt || "", justification: relation.justification || "", verificationQuestion: relation.verificationQuestion || "" });
     setConfirmationSourceId(relation.sourceId || ""); setConfirmationNote(""); setConfirmationLocator(relation.locator || ""); setConfirmationExcerpt(relation.excerpt || "");
   }
-  function startNode(kind: MapNode["kind"]) { setNodeDraft(defaultNodeDraft(kind)); setSelection({ type: "node", id: null, createKind: kind }); }
-  function startRelation(fromNodeId = "", toNodeId = "") { setRelationDraft({ ...defaultRelationDraft(view === "decision" ? opportunityId : null), fromNodeId, toNodeId }); setSelection({ type: "relation", id: null, fromNodeId, toNodeId }); }
+  function startNode(kind: MapNode["kind"]) {
+    if (pendingLinkRef.current || hasUnsavedRelation) { setError("Enregistrez ou annulez le lien en cours avant d’ajouter un nœud."); return; }
+    setNodeDraft(defaultNodeDraft(kind)); setSelection({ type: "node", id: null, createKind: kind });
+  }
+  function startRelation(sourceId = "", targetId = "") {
+    if (pendingLinkRef.current || hasUnsavedRelation) { setConnectionError("Un lien est déjà en cours. Enregistrez-le ou annulez-le dans l’éditeur avant d’en tracer un autre."); return; }
+    const source = map?.nodes.find((node) => node.id === sourceId);
+    const target = map?.nodes.find((node) => node.id === targetId);
+    if (sourceId && targetId && sourceId === targetId) { setConnectionError("Choisissez deux nœuds distincts pour créer un lien."); return; }
+    const reverse = source?.kind === "unit" && (target?.kind === "person" || target?.kind === "role_slot");
+    const fromNodeId = reverse ? targetId : sourceId;
+    const toNodeId = reverse ? sourceId : targetId;
+    const fromKind = reverse ? target?.kind : source?.kind;
+    const toKind = reverse ? source?.kind : target?.kind;
+    const kinds = sourceId && targetId ? allowedRelationKinds(fromKind, toKind) : [];
+    if (sourceId && targetId && !kinds.length) { setConnectionError("Ces types de nœuds ne peuvent pas être reliés directement. Une fonction à identifier se rattache à une unité ; deux personnes peuvent avoir un lien documenté."); return; }
+    setConnectionError(null); setError(null); setOrientationAdjusted(Boolean(reverse));
+    pendingLinkRef.current = true;
+    setRelationDraft({ ...defaultRelationDraft(view === "decision" ? opportunityId : null), fromNodeId, toNodeId, kind: kinds.length === 1 ? kinds[0] : "" });
+    setSelection({ type: "relation", id: null, fromNodeId, toNodeId });
+  }
+  function cancelRelationDraft() { pendingLinkRef.current = false; setSelection(null); setConnectionError(null); setOrientationAdjusted(false); setError(null); }
+  function updateRelationEndpoint(side: "fromNodeId" | "toNodeId", id: string) {
+    setRelationDraft((draft) => {
+      const next = { ...draft, [side]: id };
+      const fromKind = map?.nodes.find((node) => node.id === next.fromNodeId)?.kind;
+      const toKind = map?.nodes.find((node) => node.id === next.toNodeId)?.kind;
+      const kinds = allowedRelationKinds(fromKind, toKind);
+      return { ...next, kind: kinds.includes(next.kind) ? next.kind : kinds.length === 1 ? kinds[0] : "" };
+    });
+  }
+  function switchMapView(next: MapView) {
+    if (next === view) return;
+    if (hasUnsavedRelation && !window.confirm("Le lien tracé n’est pas enregistré. L’annuler et changer de vue ?")) return;
+    pendingLinkRef.current = false; setSelection(null); setConnectionError(null); setOrientationAdjusted(false); setView(next);
+  }
+  function switchOpportunity(next: string | null) {
+    if (next === opportunityId) return;
+    if (hasUnsavedRelation && !window.confirm("Le lien tracé n’est pas enregistré. L’annuler et changer d’opportunité ?")) return;
+    pendingLinkRef.current = false; setSelection(null); setConnectionError(null); setOrientationAdjusted(false); setOpportunityId(next);
+  }
 
   async function saveNode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!selection || selection.type !== "node") return;
@@ -262,13 +325,28 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
     setBusy(true); setError(null);
     try {
       if (!relationDraft.fromNodeId || !relationDraft.toNodeId || relationDraft.fromNodeId === relationDraft.toNodeId) throw new Error("Choisissez deux nœuds distincts.");
+      if (!relationKindChoices.includes(relationDraft.kind)) throw new Error("Choisissez une nature de lien compatible avec ces deux types de nœuds.");
       if (relationDraft.evidenceStatus === "hypothesis" && (!relationDraft.justification.trim() || !relationDraft.verificationQuestion.trim())) throw new Error("Une hypothèse demande une justification et une question de vérification.");
       if (["observed", "confirmed"].includes(relationDraft.evidenceStatus) && !relationDraft.sourceId) throw new Error("Cette relation demande une source.");
       const revalidate = currentRelation?.evidenceStatus === "confirmed" && relationDraft.evidenceStatus === "confirmed";
       if (revalidate && !window.confirm("Cette relation est confirmée. Enregistrer vos changements et renouveler explicitement sa validation ?")) return;
       const payload = { fromNodeId: relationDraft.fromNodeId, toNodeId: relationDraft.toNodeId, kind: relationDraft.kind, label: relationDraft.label.trim() || null, evidenceStatus: relationDraft.evidenceStatus, sourceId: relationDraft.sourceId || null, opportunityId: relationDraft.opportunityId || null, notes: relationDraft.notes.trim(), locator: relationDraft.locator.trim() || null, excerpt: relationDraft.excerpt.trim() || null, justification: relationDraft.justification.trim() || null, verificationQuestion: relationDraft.verificationQuestion.trim() || null, ...(currentRelation ? { expectedVersion: currentRelation.version } : {}), ...(revalidate ? { revalidate: true as const } : {}) };
-      await apiJson(currentRelation ? `${base(accountId)}/relations/${encodeURIComponent(currentRelation.id)}` : `${base(accountId)}/relations`, jsonInit(currentRelation ? "PATCH" : "POST", payload));
-      setSelection(null); setNotice("Relation enregistrée."); await loadMap();
+      const result = await apiJson<{ relation: MapRelation }>(currentRelation ? `${base(accountId)}/relations/${encodeURIComponent(currentRelation.id)}` : `${base(accountId)}/relations`, jsonInit(currentRelation ? "PATCH" : "POST", payload));
+      await loadMap();
+      const saved = result.relation;
+      const from = map?.nodes.find((node) => node.id === saved.fromNodeId);
+      const to = map?.nodes.find((node) => node.id === saved.toNodeId);
+      const needle = query.trim().toLocaleLowerCase("fr");
+      if (needle && [from, to].some((node) => !node || !`${node.name} ${node.title || ""} ${node.notes || ""}`.toLocaleLowerCase("fr").includes(needle))) setQuery("");
+      if (kindFilter && (from?.kind !== kindFilter || to?.kind !== kindFilter)) setKindFilter("");
+      if (statusFilter && statusFilter !== saved.evidenceStatus) setStatusFilter("");
+      const visibleInCurrentView = view === "organization" ? !saved.opportunityId
+        : saved.opportunityId === opportunityId || (!saved.opportunityId && ["works_in", "part_of"].includes(saved.kind));
+      if (!visibleInCurrentView) {
+        setView(saved.opportunityId ? "decision" : "organization");
+        if (saved.opportunityId) setOpportunityId(saved.opportunityId);
+      }
+      pendingLinkRef.current = false; setSelection(null); setConnectionError(null); setOrientationAdjusted(false); setNotice("Relation enregistrée et visible sur la carte.");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Enregistrement impossible."); }
     finally { setBusy(false); }
   }
@@ -281,7 +359,7 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
     finally { setBusy(false); }
   }
   async function createOpportunity(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (!newOpportunity.trim()) return;
+    event.preventDefault(); if (!newOpportunity.trim() || hasUnsavedRelation) return;
     setBusy(true); setError(null);
     try { const result = await apiJson<{ opportunity: MapOpportunity }>(`${base(accountId)}/opportunities`, jsonInit("POST", { name: newOpportunity.trim() })); setNewOpportunity(""); await loadMap(); setView("decision"); setOpportunityId(result.opportunity.id); setNotice("Contexte d’opportunité créé."); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Création impossible."); }
@@ -445,12 +523,12 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
 
     <div className={styles.contextBar}>
       <div className={styles.segmented} role="group" aria-label="Type de cartographie">
-        <button type="button" aria-pressed={view === "organization"} onClick={() => { setView("organization"); setSelection(null); }}>Organisation</button>
-        <button type="button" aria-pressed={view === "decision"} onClick={() => { setView("decision"); setSelection(null); }}>Décision commerciale</button>
+        <button type="button" aria-pressed={view === "organization"} onClick={() => switchMapView("organization")}>Organisation</button>
+        <button type="button" aria-pressed={view === "decision"} onClick={() => switchMapView("decision")}>Décision commerciale</button>
       </div>
       {view === "decision" ? <div className={styles.opportunityPicker}>
         <label htmlFor={`map-opportunity-${accountId}`}>Opportunité</label>
-        <select id={`map-opportunity-${accountId}`} value={opportunityId || ""} onChange={(event) => { setOpportunityId(event.target.value || null); setSelection(null); }}>
+        <select id={`map-opportunity-${accountId}`} value={opportunityId || ""} onChange={(event) => switchOpportunity(event.target.value || null)}>
           {!map.opportunities.length ? <option value="">À créer</option> : null}
           {map.opportunities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
@@ -458,7 +536,7 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
       {view === "decision" ? <form className={styles.opportunityCreate} onSubmit={(event) => void createOpportunity(event)}>
         <label className={styles.srOnly} htmlFor={`new-opportunity-${accountId}`}>Nom de la nouvelle opportunité</label>
         <input id={`new-opportunity-${accountId}`} value={newOpportunity} onChange={(event) => setNewOpportunity(event.target.value)} placeholder="Nouveau projet / opportunité" maxLength={160} />
-        <button type="submit" disabled={busy || !newOpportunity.trim()} aria-label="Créer l’opportunité"><Plus size={16} /></button>
+        <button type="submit" disabled={busy || hasUnsavedRelation || !newOpportunity.trim()} aria-label="Créer l’opportunité"><Plus size={16} /></button>
       </form> : null}
     </div>
 
@@ -482,14 +560,26 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
           <button type="button" onClick={() => startNode("person")}><Plus size={14} /> Personne</button>
           <button type="button" onClick={() => startNode("unit")}><Plus size={14} /> Unité</button>
           <button type="button" onClick={() => startNode("role_slot")}><Plus size={14} /> Fonction à identifier</button>
-          <button type="button" onClick={() => startRelation()} disabled={map.nodes.length < 2}><Plus size={14} /> Lien</button>
+          <button type="button" onClick={() => startRelation()} disabled={map.nodes.length < 2 || (view === "decision" && !opportunityId)}><Plus size={14} /> Lien</button>
         </div>
+        {connectionError ? <div className={styles.alert} role="alert"><CircleAlert size={16} /> {connectionError}<button type="button" aria-label="Masquer cette erreur" onClick={() => setConnectionError(null)}><X size={15} /></button></div> : null}
+        {pendingRelationVisible ? <p className={styles.pendingHint}>Lien provisoire visible sur le graphe. Il ne sera conservé qu’après avoir choisi sa nature, documenté l’hypothèse et cliqué sur « Enregistrer ».</p> : null}
         {presentation === "graph" ? <>
           <div className={styles.canvasFrame}>
-            {view === "decision" && !opportunityId ? <div className={styles.canvasEmpty}><CircleHelp size={24} /><strong>Choisissez ou créez une opportunité</strong><p>Les rôles et relations de décision sont propres au projet sélectionné.</p></div> : map.nodes.length ? <Canvas key={`${view}:${opportunityId || ""}:${canvasNodes.map((node) => `${node.id}:${node.name}:${node.title || ""}`).join("|")}`} nodes={canvasNodes} edges={canvasEdges} focusNodeId={searchedNodeId} selectedNodeId={selection?.type === "node" ? selection.id : null} initialViewport={contextViewport || (compactMap ? { x: 20, y: 20, zoom: .75 } : null)} onSelectNode={(id) => { const node = map.nodes.find((item) => item.id === id); if (node) chooseNode(node); }} onSelectEdge={(id) => { const edge = map.relations.find((item) => item.id === id); if (edge) chooseRelation(edge); }} onConnect={(connection) => { if (connection.source && connection.target) startRelation(connection.source, connection.target); }} onMoveNode={movedNode} onViewportChange={movedViewport} /> : <div className={styles.canvasEmpty}><Network size={25} /><strong>Votre carte commence ici</strong><p>Ajoutez un contact CRM, une unité ou une fonction à identifier. Aucun lien hiérarchique n’est créé automatiquement.</p></div>}
+            {view === "decision" && !opportunityId ? <div className={styles.canvasEmpty}><CircleHelp size={24} /><strong>Choisissez ou créez une opportunité</strong><p>Les rôles et relations de décision sont propres au projet sélectionné.</p></div> : map.nodes.length ? <Canvas key={`${view}:${opportunityId || ""}:${canvasNodes.map((node) => `${node.id}:${node.name}:${node.title || ""}`).join("|")}`} nodes={canvasNodes} edges={canvasEdges} focusNodeId={searchedNodeId} selectedNodeId={selection?.type === "node" ? selection.id : null} initialViewport={contextViewport || (compactMap ? { x: 20, y: 20, zoom: .75 } : null)} onSelectNode={(id) => { const node = map.nodes.find((item) => item.id === id); if (node) chooseNode(node); }} onSelectEdge={(id) => { if (id === pendingRelationId) { inspectorRef.current?.focus({ preventScroll: true }); inspectorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); return; } const edge = map.relations.find((item) => item.id === id); if (edge) chooseRelation(edge); }} onConnect={(connection) => { if (connection.source && connection.target) startRelation(connection.source, connection.target); }} onMoveNode={movedNode} onViewportChange={movedViewport} /> : <div className={styles.canvasEmpty}><Network size={25} /><strong>Votre carte commence ici</strong><p>Ajoutez un contact CRM, une unité ou une fonction à identifier. Aucun lien hiérarchique n’est créé automatiquement.</p></div>}
           </div>
-          <div className={styles.legend} aria-label="Légende des liens"><strong>Légende</strong><span><i className={styles.legendSolid} /> Confirmé</span><span><i className={styles.legendObserved} /> Observé dans une source</span><span><i className={styles.legendDashed} /> Hypothèse</span><span><i className={styles.legendDotted} /> Contradictoire / obsolète</span><small>La position des cartes n’est pas une preuve de hiérarchie.</small></div>
-        </> : <div className={styles.tableWrap}><table><caption>Nœuds de la cartographie</caption><thead><tr><th scope="col">Élément</th><th scope="col">Type</th><th scope="col">Détail</th><th scope="col">Relations visibles</th></tr></thead><tbody>{visibleNodes.map((node) => <tr key={node.id}><td><button type="button" onClick={() => chooseNode(node)}>{node.name}</button></td><td>{kindLabels[node.kind]}{node.unitKind ? ` · ${unitKinds.find(([key]) => key === node.unitKind)?.[1] || node.unitKind}` : ""}</td><td>{node.kind === "role_slot" && node.resolvedContactId ? `Contact lié : ${map.availableContacts.find((contact) => contact.id === node.resolvedContactId)?.name || "fiche CRM"}` : node.title || node.notes || "—"}</td><td>{visibleRelations.filter((relation) => relation.fromNodeId === node.id || relation.toNodeId === node.id).map((relation) => <button key={relation.id} type="button" onClick={() => chooseRelation(relation)}>{knownKind(relation.kind)} · {statusLabels[relation.evidenceStatus]}</button>)}</td></tr>)}{!visibleNodes.length ? <tr><td colSpan={4}>Aucun nœud dans ce filtre.</td></tr> : null}</tbody></table><table><caption>Relations dirigées</caption><thead><tr><th scope="col">De</th><th scope="col">Relation</th><th scope="col">Vers</th><th scope="col">Fiabilité</th><th scope="col">Source</th></tr></thead><tbody>{visibleRelations.map((relation) => <tr key={relation.id}><td>{map.nodes.find((node) => node.id === relation.fromNodeId)?.name || "—"}</td><td><button type="button" onClick={() => chooseRelation(relation)}>{relation.label || knownKind(relation.kind)}</button></td><td>{map.nodes.find((node) => node.id === relation.toNodeId)?.name || "—"}</td><td>{statusLabels[relation.evidenceStatus]}</td><td>{map.sources.find((source) => source.id === relation.sourceId)?.label || "À documenter"}</td></tr>)}{!visibleRelations.length ? <tr><td colSpan={5}>Aucune relation dans ce filtre.</td></tr> : null}</tbody></table></div>}
+          <div className={styles.legend} aria-label="Légende des liens"><strong>Légende</strong><span><i className={styles.legendSolid} /> Confirmé</span><span><i className={styles.legendObserved} /> Observé dans une source</span><span><i className={styles.legendDashed} /> Hypothèse</span><span><i className={styles.legendDotted} /> Contradictoire / obsolète</span><span><i className={styles.legendPending} /> Non enregistré</span><small>La position des cartes n’est pas une preuve de hiérarchie.</small></div>
+        </> : <div className={styles.tableWrap}>
+          <table><caption>Nœuds de la cartographie</caption><thead><tr><th scope="col">Élément</th><th scope="col">Type</th><th scope="col">Détail</th><th scope="col">Relations visibles</th></tr></thead><tbody>
+            {visibleNodes.map((node) => <tr key={node.id}><td><button type="button" onClick={() => chooseNode(node)}>{node.name}</button></td><td>{kindLabels[node.kind]}{node.unitKind ? ` · ${unitKinds.find(([key]) => key === node.unitKind)?.[1] || node.unitKind}` : ""}</td><td>{node.kind === "role_slot" && node.resolvedContactId ? `Contact lié : ${map.availableContacts.find((contact) => contact.id === node.resolvedContactId)?.name || "fiche CRM"}` : node.title || node.notes || "—"}</td><td>{visibleRelations.filter((relation) => relation.fromNodeId === node.id || relation.toNodeId === node.id).map((relation) => <button key={relation.id} type="button" onClick={() => chooseRelation(relation)}>{knownKind(relation.kind, map.nodes.find((item) => item.id === relation.fromNodeId)?.kind)} · {statusLabels[relation.evidenceStatus]}</button>)}</td></tr>)}
+            {!visibleNodes.length ? <tr><td colSpan={4}>Aucun nœud dans ce filtre.</td></tr> : null}
+          </tbody></table>
+          <table><caption>Relations dirigées</caption><thead><tr><th scope="col">De</th><th scope="col">Relation</th><th scope="col">Vers</th><th scope="col">Fiabilité</th><th scope="col">Source</th></tr></thead><tbody>
+            {visibleRelations.map((relation) => <tr key={relation.id}><td>{map.nodes.find((node) => node.id === relation.fromNodeId)?.name || "—"}</td><td><button type="button" onClick={() => chooseRelation(relation)}>{relation.label || knownKind(relation.kind, map.nodes.find((node) => node.id === relation.fromNodeId)?.kind)}</button></td><td>{map.nodes.find((node) => node.id === relation.toNodeId)?.name || "—"}</td><td>{statusLabels[relation.evidenceStatus]}</td><td>{map.sources.find((source) => source.id === relation.sourceId)?.label || "À documenter"}</td></tr>)}
+            {pendingRelationVisible ? <tr><td>{map.nodes.find((node) => node.id === relationDraft.fromNodeId)?.name || "—"}</td><td><button type="button" onClick={() => { inspectorRef.current?.focus({ preventScroll: true }); inspectorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>{relationDraft.kind ? knownKind(relationDraft.kind, relationFromKind) : "Type à choisir"} · non enregistré</button></td><td>{map.nodes.find((node) => node.id === relationDraft.toNodeId)?.name || "—"}</td><td>En attente</td><td>À documenter</td></tr> : null}
+            {!visibleRelations.length && !pendingRelationVisible ? <tr><td colSpan={5}>Aucune relation dans ce filtre.</td></tr> : null}
+          </tbody></table>
+        </div>}
         {unusedContacts.length ? <details className={styles.available}><summary>Contacts CRM à placer ({unusedContacts.length})</summary><p>Un contact ajouté ici reste lié à sa fiche et à ses activités existantes.</p><div>{unusedContacts.map((contact) => <button key={contact.id} type="button" disabled={busy} onClick={() => void addExistingContact(contact.id)}><UserRound size={14} /> {contact.name}<small>{contact.verifiedTitle || contact.inputTitle || "Poste à préciser"}</small><Plus size={13} /></button>)}</div></details> : null}
         <details className={styles.questions}><summary>Questions ouvertes ({openQuestions.length})</summary><label className={styles.actionDue}>Échéance facultative pour une action du suivi<input type="datetime-local" value={nextActionDate} onChange={(event) => setNextActionDate(event.target.value)} /></label><ul>{openQuestions.map((item) => <li key={item.id}><span>{item.question}{item.nextAction ? <small>Prochaine piste : {item.nextAction}</small> : null}</span><div><button type="button" onClick={() => void promoteQuestionAction(item)} disabled={busy || !prospect}>Définir comme prochaine action du suivi</button><button type="button" onClick={() => void answerQuestion(item.id, item.version)} disabled={busy}>Vérifiée</button></div></li>)}{!openQuestions.length ? <li>Aucune question pour l’instant.</li> : null}</ul><form onSubmit={(event) => void createQuestion(event)}><label>Nouvelle question<input value={newQuestion} onChange={(event) => setNewQuestion(event.target.value)} placeholder="Que reste-t-il à vérifier ?" maxLength={2000} /></label><label>Prochaine piste, facultative<input value={newQuestionAction} onChange={(event) => setNewQuestionAction(event.target.value)} placeholder="Ex. demander au RAF" maxLength={2000} /></label><button type="submit" disabled={busy || !newQuestion.trim()}><Plus size={14} /> Ajouter</button></form></details>
       </div>
@@ -529,13 +619,17 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
           </div> : null}
           {currentNode && (map.claims.some((claim) => claim.subjectNodeId === currentNode.id && claim.evidenceStatus !== "confirmed") || map.stakeholderRoles.some((role) => role.personNodeId === currentNode.id && role.opportunityId === opportunityId && role.evidenceStatus !== "confirmed")) ? confirmationFields() : null}
           <div className={styles.formActions}><button type="submit" className={styles.primaryButton} disabled={busy}><Save size={14} /> Enregistrer</button>{selection.id && currentNode?.kind !== "person" && !currentNode?.isRoot ? <button type="button" className={styles.dangerButton} onClick={() => void deleteSelected()} disabled={busy}><Trash2 size={14} /> Supprimer</button> : null}</div>
-        </form> : <form onSubmit={(event) => void saveRelation(event)}>
-          <div className={styles.inspectorHeader}><span>{selection.id ? "Modifier le lien" : "Créer un lien"}</span><button type="button" onClick={() => setSelection(null)} aria-label="Fermer l’éditeur"><X size={17} /></button></div>
+        </form> : <form noValidate onSubmit={(event) => void saveRelation(event)}>
+          <div className={styles.inspectorHeader}><span>{selection.id ? "Modifier le lien" : "Lien provisoire · non enregistré"}</span><button type="button" onClick={selection.id ? () => setSelection(null) : cancelRelationDraft} aria-label={selection.id ? "Fermer l’éditeur" : "Annuler le lien non enregistré"}><X size={17} /></button></div>
           <h2>Relation documentée</h2>
-          <label>De<select value={relationDraft.fromNodeId} onChange={(event) => setRelationDraft((draft) => ({ ...draft, fromNodeId: event.target.value }))} required><option value="">Choisir un nœud</option>{map.nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
-          <label>Vers<select value={relationDraft.toNodeId} onChange={(event) => setRelationDraft((draft) => ({ ...draft, toNodeId: event.target.value }))} required><option value="">Choisir un nœud</option>{map.nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
-          <label>Nature<select value={relationDraft.kind} onChange={(event) => setRelationDraft((draft) => ({ ...draft, kind: event.target.value }))}>{relationKinds.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-          <label>Libellé sur le graphe<input value={relationDraft.label} onChange={(event) => setRelationDraft((draft) => ({ ...draft, label: event.target.value }))} placeholder={knownKind(relationDraft.kind)} maxLength={100} /></label>
+          {error ? <div className={styles.alert} role="alert"><CircleAlert size={16} /> {error}</div> : null}
+          {!selection.id ? <p className={styles.hint}>Ce lien n’est pas encore sauvegardé. Son trait provisoire reste visible jusqu’à « Enregistrer » ou « Annuler le lien ».</p> : null}
+          {!selection.id && orientationAdjusted ? <p className={styles.hint}>Sens ajusté : le lien va de la personne ou fonction recherchée vers l’unité.</p> : null}
+          <label>De<select value={relationDraft.fromNodeId} onChange={(event) => updateRelationEndpoint("fromNodeId", event.target.value)} required><option value="">Choisir un nœud</option>{map.nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+          <label>Vers<select value={relationDraft.toNodeId} onChange={(event) => updateRelationEndpoint("toNodeId", event.target.value)} required><option value="">Choisir un nœud</option>{map.nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+          {relationDraft.fromNodeId && relationDraft.toNodeId && !relationKindChoices.length ? <p className={styles.hint}>Ces deux types de nœuds ne peuvent pas être liés dans ce sens. Choisissez une personne ou une fonction vers une unité, deux unités, ou deux personnes.</p> : null}
+          <label>Nature<select value={relationDraft.kind} onChange={(event) => setRelationDraft((draft) => ({ ...draft, kind: event.target.value }))} required><option value="">Choisir la nature du lien</option>{relationKindChoices.map((kind) => <option key={kind} value={kind}>{knownKind(kind, relationFromKind)}</option>)}</select></label>
+          <label>Libellé sur le graphe<input value={relationDraft.label} onChange={(event) => setRelationDraft((draft) => ({ ...draft, label: event.target.value }))} placeholder={relationDraft.kind ? knownKind(relationDraft.kind, relationFromKind) : "Choisir d’abord la nature"} maxLength={100} /></label>
           <label>Fiabilité<select value={relationDraft.evidenceStatus} onChange={(event) => setRelationDraft((draft) => ({ ...draft, evidenceStatus: event.target.value as EvidenceStatus }))}>{statusOptions.filter(([key]) => key !== "confirmed" || currentRelation?.evidenceStatus === "confirmed").map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
           <label>Source<select value={relationDraft.sourceId} onChange={(event) => setRelationDraft((draft) => ({ ...draft, sourceId: event.target.value }))}><option value="">Aucune source</option>{map.sources.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label>
           <p className={styles.hint}>Pour « Observé » ou « Confirmé », la source doit contenir une référence, un extrait ou un repère consultable.</p>
@@ -547,8 +641,8 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
           <label>Notes<textarea value={relationDraft.notes} onChange={(event) => setRelationDraft((draft) => ({ ...draft, notes: event.target.value }))} rows={4} /></label>
           {currentRelation?.sourceId ? <div className={styles.evidenceBox}><strong>Preuve liée</strong><p>{map.sources.find((item) => item.id === currentRelation.sourceId)?.label || currentRelation.sourceId}</p>{currentRelation.excerpt ? <p>« {currentRelation.excerpt} »</p> : null}{currentRelation.validatedBy ? <p>Validé par {currentRelation.validatedBy} le {currentRelation.validatedAt ? new Date(currentRelation.validatedAt).toLocaleDateString("fr-FR") : "date inconnue"}</p> : null}</div> : null}
           {currentRelation && currentRelation.evidenceStatus !== "confirmed" ? <>{confirmationFields()}<button type="button" className={styles.button} onClick={() => void confirmEvidence("relations", currentRelation.id, currentRelation.version, currentRelation.sourceId, currentRelation.notes)} disabled={busy}>Confirmer après vérification</button></> : null}
-          <p className={styles.hint}>Le sens du lien va de « De » vers « Vers ». Une relation supposée reste visible comme hypothèse.</p>
-          <div className={styles.formActions}><button type="submit" className={styles.primaryButton} disabled={busy}><Save size={14} /> Enregistrer</button>{selection.id ? <button type="button" className={styles.dangerButton} onClick={() => void deleteSelected()} disabled={busy}><Trash2 size={14} /> Retirer</button> : null}</div>
+          <p className={styles.hint}>Le sens du lien va de « De » vers « Vers ». Pour une hypothèse, renseignez pourquoi vous la formulez et quelle question permettra de la vérifier avant de l’enregistrer.</p>
+          <div className={styles.formActions}><button type="submit" className={styles.primaryButton} disabled={busy}><Save size={14} /> Enregistrer</button>{selection.id ? <button type="button" className={styles.dangerButton} onClick={() => void deleteSelected()} disabled={busy}><Trash2 size={14} /> Retirer</button> : <button type="button" className={styles.button} onClick={cancelRelationDraft} disabled={busy}>Annuler le lien</button>}</div>
         </form>}
       </aside>
     </div>

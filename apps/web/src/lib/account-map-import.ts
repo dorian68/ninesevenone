@@ -441,7 +441,7 @@ function addRelation(db: DatabaseSync, batchId: string, document: AccountMapImpo
   if (!from || !to || from.prospect_id !== document.account_id || to.prospect_id !== document.account_id) {
     throw new AccountMapImportError("Relation vers un nœud absent ou un autre compte.", "INVALID_RELATION_REFERENCE");
   }
-  const validKinds = kind === "works_in" ? from.kind === "person" && to.kind === "unit"
+  const validKinds = kind === "works_in" ? ["person", "role_slot"].includes(from.kind) && to.kind === "unit"
     : kind === "part_of" ? from.kind === "unit" && to.kind === "unit"
       : kind === "advises" ? from.kind === "person" && ["person", "unit"].includes(to.kind)
         : from.kind === "person" && to.kind === "person";

@@ -121,6 +121,25 @@ describe("Account map persistence", () => {
     expect(map.deleteAccountMapOpportunity(prospect.id, opportunity.id)).toBe(true);
   });
 
+  it("links a function to identify with an organizational unit without creating a contact", () => {
+    const prospect = account("Compte Fonction À Identifier");
+    const root = map.getAccountMap(prospect.id)!.nodes.find((node) => node.isRoot)!;
+    const slot = map.createAccountMapNode(prospect.id, {
+      kind: "role_slot", name: "Responsable du reporting à identifier"
+    });
+    const relation = map.createAccountMapRelation(prospect.id, {
+      fromNodeId: slot.id, toNodeId: root.id, kind: "works_in",
+      justification: "Service de rattachement possible", verificationQuestion: "Où se situe cette fonction ?"
+    });
+    expect(relation.kind).toBe("works_in");
+    expect(map.getAccountMap(prospect.id)!.relations.some((item) => item.id === relation.id)).toBe(true);
+    expect(crm.listProspectContacts(prospect.id)).toHaveLength(0);
+    expect(() => map.createAccountMapRelation(prospect.id, {
+      fromNodeId: root.id, toNodeId: slot.id, kind: "works_in",
+      justification: "À vérifier", verificationQuestion: "Quel rattachement ?"
+    })).toThrow(map.AccountMapInputError);
+  });
+
   it("rejects a cycle in explicitly created unit memberships and stale edits", () => {
     const prospect = account("Compte Unités");
     const first = map.createAccountMapNode(prospect.id, { kind: "unit", unitKind: "department", name: "Service A" });

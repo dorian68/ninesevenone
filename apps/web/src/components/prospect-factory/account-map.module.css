@@ -75,7 +75,9 @@
 .legend .legendObserved { border-color: #6d7f98; }
 .legend .legendDashed { border-style: dashed; }
 .legend .legendDotted { border-style: dotted; }
+.legend .legendPending { border-color: #a7620c; border-style: dashed; border-top-width: 3px; }
 .legend small { margin-left: auto; font-size: .62rem; }
+.pendingHint { margin: 0 0 8px; padding: 7px 9px; border: 1px solid #eed5a5; border-radius: 8px; color: #784e18; background: #fff9ec; font-size: .68rem; line-height: 1.45; }
 .tableWrap { min-height: 420px; overflow: auto; border: 1px solid #dbe2ed; border-radius: 10px; }
 .tableWrap table { width: 100%; border-collapse: collapse; text-align: left; }
 .tableWrap table + table { margin-top: 15px; }

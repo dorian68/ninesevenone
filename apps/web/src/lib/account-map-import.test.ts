@@ -315,4 +315,20 @@ describe("account-map import", () => {
     }));
     expect(counts).toEqual({ nodes: { n: 0 }, relations: { n: 0 }, batches: { n: 0 } });
   });
+
+  it("attaches a function to identify to a unit without creating a CRM contact", () => {
+    const saved = account();
+    const value = document(saved.id);
+    value.people = [];
+    value.relations = [{ from_ref: "tmp:slot:budget", to_ref: "tmp:unit:admin", kind: "works_in",
+      opportunity_id: null, evidence: { status: "observed", source_ids: ["src:screen:1"], locator: "Fonction affichée dans le service" } }];
+    applyDefaults(saved.id, value);
+    expect(listProspectContacts(saved.id)).toHaveLength(0);
+    const relation = withAccountMapDatabase((db) => db.prepare(`SELECT relation.kind, source.kind AS from_kind, target.kind AS to_kind
+      FROM prospect_factory_map_relations relation
+      JOIN prospect_factory_map_nodes source ON source.id=relation.from_node_id
+      JOIN prospect_factory_map_nodes target ON target.id=relation.to_node_id
+      WHERE relation.prospect_id=?`).get(saved.id));
+    expect(relation).toEqual({ kind: "works_in", from_kind: "role_slot", to_kind: "unit" });
+  });
 });

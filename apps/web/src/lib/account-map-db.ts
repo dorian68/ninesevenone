@@ -444,7 +444,7 @@ function syncEvidenceSources(db: DB, accountId: string, subjectKind: "relation" 
   for (const sourceId of sourceIds) insert.run(randomUUID(), accountId, subjectKind, subjectId, sourceId, nullable(locator), nullable(excerpt));
 }
 function assertRelationEndpoints(from: Row, to: Row, kind: MapRelationKind) {
-  const valid = kind === "works_in" ? from.kind === "person" && to.kind === "unit"
+  const valid = kind === "works_in" ? (from.kind === "person" || from.kind === "role_slot") && to.kind === "unit"
     : kind === "part_of" ? from.kind === "unit" && to.kind === "unit"
       : from.kind === "person" && to.kind === "person";
   if (!valid) throw new AccountMapInputError("kind", "Ce type de lien ne correspond pas aux nœuds choisis.");

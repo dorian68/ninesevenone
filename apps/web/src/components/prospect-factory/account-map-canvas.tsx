@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   Background,
   Controls,
@@ -73,6 +73,7 @@ const nodeTypes = { accountMapCard: GraphCard };
 
 function CanvasInner({ nodes: items, edges: links, focusNodeId, selectedNodeId, initialViewport, onSelectNode, onSelectEdge, onConnect, onMoveNode, onViewportChange }: CanvasProps) {
   const flow = useReactFlow();
+  const suppressNodeClickUntil = useRef(0);
   const mappedNodes = useMemo<Node<CardData>[]>(() => items.map((item) => ({
     id: item.id,
     type: "accountMapCard",
@@ -90,11 +91,11 @@ function CanvasInner({ nodes: items, edges: links, focusNodeId, selectedNodeId, 
     type: "smoothstep",
     animated: false,
     className: `${styles.graphEdge} ${styles[`graphEdge_${link.status || "unknown"}`]}`,
-    style: { stroke: link.status === "confirmed" ? "#3657c8" : "#667994", strokeWidth: 2, strokeDasharray: link.status === "hypothesis" ? "6 5" : link.status === "contradictory" || link.status === "obsolete" ? "2 4" : undefined },
-    labelStyle: { fill: "#33435e", fontSize: 11, fontWeight: 650 },
+    style: { stroke: link.status === "pending" ? "#a7620c" : link.status === "confirmed" ? "#3657c8" : "#667994", strokeWidth: link.status === "pending" ? 2.5 : 2, strokeDasharray: link.status === "pending" ? "9 5" : link.status === "hypothesis" ? "6 5" : link.status === "contradictory" || link.status === "obsolete" ? "2 4" : undefined },
+    labelStyle: { fill: link.status === "pending" ? "#8a510a" : "#33435e", fontSize: 11, fontWeight: 650 },
     labelBgStyle: { fill: "#fff", fillOpacity: .95 },
     labelBgPadding: [5, 3],
-    markerEnd: { type: MarkerType.ArrowClosed, color: link.status === "confirmed" ? "#3657c8" : "#667994" }
+    markerEnd: { type: MarkerType.ArrowClosed, color: link.status === "pending" ? "#a7620c" : link.status === "confirmed" ? "#3657c8" : "#667994" }
   })), [links]);
 
   useEffect(() => {
@@ -108,9 +109,11 @@ function CanvasInner({ nodes: items, edges: links, focusNodeId, selectedNodeId, 
     edges={edges}
     nodeTypes={nodeTypes}
     onNodesChange={onNodesChange}
-    onNodeClick={(_, node) => onSelectNode(node.id)}
+    onNodeClick={(_, node) => { if (Date.now() >= suppressNodeClickUntil.current) onSelectNode(node.id); }}
     onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
-    onConnect={onConnect}
+    onConnectStart={() => { suppressNodeClickUntil.current = Number.POSITIVE_INFINITY; }}
+    onConnect={(connection) => { suppressNodeClickUntil.current = Date.now() + 300; onConnect(connection); }}
+    onConnectEnd={() => { suppressNodeClickUntil.current = Date.now() + 300; }}
     onNodeDragStop={(_, node) => onMoveNode(node.id, node.position)}
     onMoveEnd={(_, viewport) => onViewportChange(viewport)}
     defaultViewport={initialViewport || { x: 0, y: 0, zoom: 1 }}

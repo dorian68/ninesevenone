@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
   Background,
+  ConnectionMode,
   Controls,
   Handle,
   MarkerType,
@@ -89,13 +90,14 @@ function CanvasInner({ nodes: items, edges: links, focusNodeId, selectedNodeId, 
     target: link.target,
     label: link.label || link.kind.replaceAll("_", " "),
     type: "smoothstep",
+    interactionWidth: 24,
     animated: false,
     className: `${styles.graphEdge} ${styles[`graphEdge_${link.status || "unknown"}`]}`,
-    style: { stroke: link.status === "pending" ? "#a7620c" : link.status === "confirmed" ? "#3657c8" : "#667994", strokeWidth: link.status === "pending" ? 2.5 : 2, strokeDasharray: link.status === "pending" ? "9 5" : link.status === "hypothesis" ? "6 5" : link.status === "contradictory" || link.status === "obsolete" ? "2 4" : undefined },
-    labelStyle: { fill: link.status === "pending" ? "#8a510a" : "#33435e", fontSize: 11, fontWeight: 650 },
+    style: { stroke: link.status === "confirmed" ? "#3657c8" : "#667994", strokeWidth: 2, strokeDasharray: link.status === "hypothesis" || link.status === "saving" ? "6 5" : link.status === "contradictory" || link.status === "obsolete" ? "2 4" : undefined },
+    labelStyle: { fill: "#33435e", fontSize: 11, fontWeight: 650 },
     labelBgStyle: { fill: "#fff", fillOpacity: .95 },
     labelBgPadding: [5, 3],
-    markerEnd: { type: MarkerType.ArrowClosed, color: link.status === "pending" ? "#a7620c" : link.status === "confirmed" ? "#3657c8" : "#667994" }
+    markerEnd: { type: MarkerType.ArrowClosed, color: link.status === "confirmed" ? "#3657c8" : "#667994" }
   })), [links]);
 
   useEffect(() => {
@@ -113,7 +115,15 @@ function CanvasInner({ nodes: items, edges: links, focusNodeId, selectedNodeId, 
     onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
     onConnectStart={() => { suppressNodeClickUntil.current = Number.POSITIVE_INFINITY; }}
     onConnect={(connection) => { suppressNodeClickUntil.current = Date.now() + 300; onConnect(connection); }}
-    onConnectEnd={() => { suppressNodeClickUntil.current = Date.now() + 300; }}
+    onConnectEnd={(_, state) => {
+      suppressNodeClickUntil.current = Date.now() + 300;
+      // React Flow may suppress onConnect when this pair is already linked.
+      // Let the parent reveal that existing link instead of silently dropping
+      // the user's gesture. In-flight new links are deduplicated there too.
+      if (state.fromNode && state.toNode && state.fromNode.id !== state.toNode.id) {
+        onConnect({ source: state.fromNode.id, target: state.toNode.id, sourceHandle: null, targetHandle: null });
+      }
+    }}
     onNodeDragStop={(_, node) => onMoveNode(node.id, node.position)}
     onMoveEnd={(_, viewport) => onViewportChange(viewport)}
     defaultViewport={initialViewport || { x: 0, y: 0, zoom: 1 }}
@@ -121,6 +131,7 @@ function CanvasInner({ nodes: items, edges: links, focusNodeId, selectedNodeId, 
     fitViewOptions={{ padding: .25, maxZoom: 1 }}
     minZoom={.2}
     maxZoom={2}
+    connectionMode={ConnectionMode.Loose}
     nodesConnectable
     nodesDraggable
     edgesFocusable

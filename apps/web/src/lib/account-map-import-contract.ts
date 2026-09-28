@@ -95,7 +95,7 @@ const roleSlot = z.object({
 const relation = z.object({
   from_ref: graphRef,
   to_ref: graphRef,
-  kind: z.enum(["works_in", "reports_to", "functional_reports_to", "part_of", "can_introduce", "advises"]),
+  kind: z.enum(["unqualified", "works_in", "reports_to", "functional_reports_to", "part_of", "can_introduce", "advises"]),
   opportunity_id: id.nullable().optional(),
   evidence: accountMapImportEvidenceSchema
 }).strict().refine((value) => value.from_ref !== value.to_ref, "Une relation ne peut pas relier un nœud à lui-même.");

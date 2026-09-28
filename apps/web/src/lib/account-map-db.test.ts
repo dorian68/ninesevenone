@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { beforeAll, beforeEach, afterAll, describe, expect, it } from "vitest";
 
 const directory = mkdtempSync(join(tmpdir(), "guad-account-map-"));
@@ -66,6 +67,44 @@ describe("Account map persistence", () => {
     expect(() => map.createAccountMapRelation(prospect.id, {
       fromNodeId: person.id, toNodeId: otherRoot.id, kind: "works_in",
       justification: "À vérifier", verificationQuestion: "Travaille-t-elle dans cette unité ?"
+    })).toThrow(map.AccountMapInputError);
+  });
+
+  it("saves an unqualified link immediately and deduplicates repeated quick creation", () => {
+    const prospect = account("Compte Liens Rapides");
+    const contact = crm.createProspectContact(prospect.id, { name: "Camille Exemple" });
+    const snapshot = map.getAccountMap(prospect.id)!;
+    const person = snapshot.nodes.find((node) => node.contactId === contact.id)!;
+    const root = snapshot.nodes.find((node) => node.isRoot)!;
+    const slot = map.createAccountMapNode(prospect.id, { kind: "role_slot", name: "Validateur à identifier" });
+    const first = map.createAccountMapRelation(prospect.id, {
+      fromNodeId: root.id, toNodeId: person.id, kind: "unqualified"
+    });
+    expect(first.evidenceStatus).toBe("hypothesis");
+    expect(first.justification).toBeNull();
+    expect(first.verificationQuestion).toBeNull();
+    const repeated = map.createAccountMapRelation(prospect.id, {
+      fromNodeId: root.id, toNodeId: person.id, kind: "unqualified"
+    });
+    expect(repeated.id).toBe(first.id);
+    expect(repeated.version).toBe(first.version);
+    const reversed = map.createAccountMapRelation(prospect.id, {
+      fromNodeId: person.id, toNodeId: root.id, kind: "unqualified"
+    });
+    expect(reversed.id).toBe(first.id);
+    expect(map.getAccountMap(prospect.id)!.relations).toHaveLength(1);
+
+    // A neutral link does not claim an organizational or commercial meaning.
+    const second = map.createAccountMapRelation(prospect.id, {
+      fromNodeId: person.id, toNodeId: slot.id, kind: "unqualified"
+    });
+    expect(second.id).not.toBe(first.id);
+    const typed = map.createAccountMapRelation(prospect.id, {
+      fromNodeId: person.id, toNodeId: root.id, kind: "works_in"
+    });
+    expect(typed.evidenceStatus).toBe("hypothesis");
+    expect(() => map.createAccountMapRelation(prospect.id, {
+      fromNodeId: person.id, toNodeId: person.id, kind: "unqualified"
     })).toThrow(map.AccountMapInputError);
   });
 
@@ -251,5 +290,78 @@ describe("Account map persistence", () => {
     }, "session:second")!;
     expect(resolved.evidenceStatus).toBe("confirmed");
     expect(resolved.validatedBy).toBe("session:second");
+  });
+
+  it("migrates v6 relations without changing evidence, journal entries, or foreign keys", () => {
+    const prospect = account("Compte Migration Liens");
+    const contact = crm.createProspectContact(prospect.id, { name: "Camille Exemple" });
+    const snapshot = map.getAccountMap(prospect.id)!;
+    const person = snapshot.nodes.find((node) => node.contactId === contact.id)!;
+    const root = snapshot.nodes.find((node) => node.isRoot)!;
+    const source = map.createAccountMapSource(prospect.id, {
+      kind: "meeting_note", label: "Entretien", excerpt: "Camille travaille sur ce compte."
+    });
+    const relation = map.createAccountMapRelation(prospect.id, {
+      fromNodeId: person.id, toNodeId: root.id, kind: "works_in",
+      evidenceStatus: "confirmed", sourceId: source.id, locator: "Ligne 1", label: "Affiliation"
+    }, "session:validation");
+    const batchId = randomUUID();
+    const changeId = randomUUID();
+    crm.withAccountMapDatabase((db) => {
+      db.prepare(`INSERT INTO prospect_factory_map_import_batches
+        (id,prospect_id,payload_hash,status,applied_at,applied_by) VALUES (?,?,'hash','applied',?,?)`)
+        .run(batchId, prospect.id, new Date().toISOString(), "session:import");
+      db.prepare(`INSERT INTO prospect_factory_map_import_changes
+        (id,batch_id,entity_table,entity_id,operation,after_json,applied_version)
+        VALUES (?,?,?,?,'create',?,?)`)
+        .run(changeId, batchId, "prospect_factory_map_relations", relation.id, JSON.stringify(relation), String(relation.version));
+
+      // Recreate the historical v6 CHECK constraint and force only the v7
+      // migration on reopen. This uses the disposable database of this test.
+      const tableSql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='prospect_factory_map_relations'`)
+        .get() as { sql: string }).sql;
+      const triggerNames = ["prospect_factory_map_relations_scope_insert", "prospect_factory_map_relations_scope_update",
+        "prospect_factory_map_relations_evidence_delete", "prospect_factory_map_evidence_scope_insert"];
+      const triggerSql = triggerNames.map((name) => (db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?")
+        .get(name) as { sql: string }).sql);
+      const legacySql = tableSql
+        .replace(/CREATE TABLE ["']?prospect_factory_map_relations["']?/i, "CREATE TABLE prospect_factory_map_relations_v6")
+        .replace("'unqualified',", "");
+      expect(legacySql).not.toContain("'unqualified'");
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.exec("DROP TRIGGER prospect_factory_map_evidence_scope_insert");
+        db.exec(legacySql);
+        db.exec("INSERT INTO prospect_factory_map_relations_v6 SELECT * FROM prospect_factory_map_relations");
+        db.exec("DROP TABLE prospect_factory_map_relations");
+        db.exec("ALTER TABLE prospect_factory_map_relations_v6 RENAME TO prospect_factory_map_relations");
+        db.exec(`CREATE INDEX prospect_factory_map_relations_account_idx
+          ON prospect_factory_map_relations(prospect_id, opportunity_id, kind)`);
+        for (const sql of triggerSql) db.exec(sql);
+        db.exec("PRAGMA user_version = 6");
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+    });
+    crm.closeProspectCrmDatabase();
+
+    const migrated = map.getAccountMap(prospect.id)!;
+    const preserved = migrated.relations.find((item) => item.id === relation.id)!;
+    expect(preserved).toMatchObject({
+      id: relation.id, kind: "works_in", evidenceStatus: "confirmed", sourceIds: [source.id],
+      locator: "Ligne 1", validatedBy: "session:validation", validatedAt: relation.validatedAt,
+      version: relation.version
+    });
+    crm.withAccountMapDatabase((db) => {
+      expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect((db.prepare(`SELECT id FROM prospect_factory_map_evidence_sources WHERE subject_kind='relation' AND subject_id=?`)
+        .get(relation.id) as { id: string }).id).toBeTruthy();
+      expect((db.prepare("SELECT entity_id FROM prospect_factory_map_import_changes WHERE id=?")
+        .get(changeId) as { entity_id: string }).entity_id).toBe(relation.id);
+    });
+    const quick = map.createAccountMapRelation(prospect.id, {
+      fromNodeId: root.id, toNodeId: person.id, kind: "unqualified"
+    });
+    expect(quick.kind).toBe("unqualified");
   });
 });

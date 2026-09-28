@@ -66,7 +66,9 @@
 .graphCardText strong { font-size: .75rem; line-height: 1.25; overflow-wrap: anywhere; }
 .graphCardText small { color: #65748c; font-size: .65rem; line-height: 1.25; overflow-wrap: anywhere; }
 .graphCardStatus { align-self: flex-start; margin-left: auto; color: #856325; font-size: .58rem; white-space: nowrap; }
-.handle { width: 9px !important; height: 9px !important; border: 2px solid #fff !important; background: #3657c8 !important; }
+.handle { width: 16px !important; height: 16px !important; border: 3px solid #fff !important; background: #3657c8 !important; box-shadow: 0 0 0 1px #95a8df; cursor: crosshair; }
+.handle:hover { background: #244ab8 !important; box-shadow: 0 0 0 4px #dce5ff; }
+@media (pointer: coarse) { .handle { width: 20px !important; height: 20px !important; } }
 .graphEdge { cursor: pointer; }
 .legend { padding: 8px 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; border: 1px solid #e2e8f1; border-radius: 8px; color: #62718b; background: #fbfcff; font-size: .63rem; }
 .legend strong { color: #334560; }
@@ -75,9 +77,7 @@
 .legend .legendObserved { border-color: #6d7f98; }
 .legend .legendDashed { border-style: dashed; }
 .legend .legendDotted { border-style: dotted; }
-.legend .legendPending { border-color: #a7620c; border-style: dashed; border-top-width: 3px; }
 .legend small { margin-left: auto; font-size: .62rem; }
-.pendingHint { margin: 0 0 8px; padding: 7px 9px; border: 1px solid #eed5a5; border-radius: 8px; color: #784e18; background: #fff9ec; font-size: .68rem; line-height: 1.45; }
 .tableWrap { min-height: 420px; overflow: auto; border: 1px solid #dbe2ed; border-radius: 10px; }
 .tableWrap table { width: 100%; border-collapse: collapse; text-align: left; }
 .tableWrap table + table { margin-top: 15px; }

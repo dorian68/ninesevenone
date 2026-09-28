@@ -179,7 +179,7 @@ export function getAccountMap(accountId: string): AccountMapSnapshot | null {
     const sourceRows = queryAll(db, "SELECT * FROM prospect_factory_map_sources WHERE prospect_id=? ORDER BY collected_at DESC,created_at DESC", accountId);
     const claimRows = queryAll(db, "SELECT * FROM prospect_factory_map_claims WHERE prospect_id=? ORDER BY created_at", accountId);
     const questionRows = queryAll(db, "SELECT * FROM prospect_factory_map_questions WHERE prospect_id=? ORDER BY created_at", accountId);
-    const roleRows = queryAll(db, "SELECT * FROM prospect_factory_map_stakeholder_roles WHERE prospect_id=? ORDER BY created_at", accountId);
+    const roleRows = queryAll(db, "SELECT * FROM prospect_factory_map_stakeholder_roles WHERE prospect_id=? ORDER BY created_at, rowid", accountId);
     const evidenceRows = queryAll(db, "SELECT subject_kind,subject_id,source_id FROM prospect_factory_map_evidence_sources WHERE prospect_id=?", accountId);
     const evidenceBySubject = new Map<string, string[]>();
     for (const row of evidenceRows) {
@@ -419,7 +419,8 @@ function assertExplicitRevalidation(currentStatus: MapEvidenceStatus, nextStatus
     throw new AccountMapInputError("revalidate", "La preuve ou l’information confirmée a changé ; confirmez explicitement sa nouvelle validation.");
   }
 }
-function checkedEvidence(db: DB, accountId: string, input: EvidenceInput, actorId?: string | null) {
+function checkedEvidence(db: DB, accountId: string, input: EvidenceInput, actorId?: string | null,
+  allowUnexplainedHypothesis = false) {
   const status = input.evidenceStatus ?? "hypothesis";
   const sourceIds = [...new Set([...(input.sourceIds ?? []), ...(input.sourceId ? [input.sourceId] : [])])];
   for (const sourceId of sourceIds) requireSource(db, accountId, sourceId);
@@ -428,7 +429,7 @@ function checkedEvidence(db: DB, accountId: string, input: EvidenceInput, actorI
     throw new AccountMapInputError("sourceIds", "La source doit contenir une référence, un extrait ou un repère consultable.");
   }
   if (status === "confirmed" && !actorId) throw new AccountMapInputError("evidenceStatus", "Une confirmation exige une session d’administration traçable.");
-  if (status === "hypothesis" && (!input.justification?.trim() || !input.verificationQuestion?.trim())) {
+  if (status === "hypothesis" && !allowUnexplainedHypothesis && (!input.justification?.trim() || !input.verificationQuestion?.trim())) {
     throw new AccountMapInputError("justification", "Un lien supposé exige une justification et une question de vérification.");
   }
   return { status, sourceId: input.sourceId ?? sourceIds[0] ?? null, sourceIds,
@@ -444,7 +445,8 @@ function syncEvidenceSources(db: DB, accountId: string, subjectKind: "relation" 
   for (const sourceId of sourceIds) insert.run(randomUUID(), accountId, subjectKind, subjectId, sourceId, nullable(locator), nullable(excerpt));
 }
 function assertRelationEndpoints(from: Row, to: Row, kind: MapRelationKind) {
-  const valid = kind === "works_in" ? (from.kind === "person" || from.kind === "role_slot") && to.kind === "unit"
+  const valid = kind === "unqualified" ? true
+    : kind === "works_in" ? (from.kind === "person" || from.kind === "role_slot") && to.kind === "unit"
     : kind === "part_of" ? from.kind === "unit" && to.kind === "unit"
       : from.kind === "person" && to.kind === "person";
   if (!valid) throw new AccountMapInputError("kind", "Ce type de lien ne correspond pas aux nœuds choisis.");
@@ -470,10 +472,21 @@ export function createAccountMapRelation(accountId: string, input: CreateRelatio
     assertRelationEndpoints(from, to, input.kind);
     requireOpportunity(db, accountId, input.opportunityId);
     if (input.kind === "part_of") assertNoUnitCycle(db, accountId, input.fromNodeId, input.toNodeId);
-    const evidence = checkedEvidence(db, accountId, input, actorId);
+    const evidence = checkedEvidence(db, accountId, input, actorId, true);
     const id = randomUUID(); const timestamp = now();
     db.exec("BEGIN IMMEDIATE");
     try {
+      if (input.kind === "unqualified") {
+        const existing = queryOne(db, `SELECT id FROM prospect_factory_map_relations
+          WHERE prospect_id=? AND opportunity_id IS ? AND kind='unqualified'
+            AND ((from_node_id=? AND to_node_id=?) OR (from_node_id=? AND to_node_id=?))
+          LIMIT 1`, accountId, nullable(input.opportunityId), input.fromNodeId, input.toNodeId,
+          input.toNodeId, input.fromNodeId);
+        if (existing) {
+          db.exec("COMMIT");
+          return readRelation(db, accountId, String(existing.id))!;
+        }
+      }
       db.prepare(`INSERT INTO prospect_factory_map_relations
         (id,prospect_id,from_node_id,to_node_id,kind,opportunity_id,evidence_status,source_id,source_ids_json,
          label,notes,locator,excerpt,justification,verification_question,validated_by,validated_at,created_at,updated_at)
@@ -508,7 +521,7 @@ export function updateAccountMapRelation(accountId: string, relationId: string,
       next.excerpt !== current.excerpt || next.justification !== current.justification ||
       next.verificationQuestion !== current.verificationQuestion;
     assertExplicitRevalidation(current.evidenceStatus, next.evidenceStatus, materiallyChanged, patch.revalidate);
-    const evidence = materiallyChanged || patch.revalidate ? checkedEvidence(db, accountId, next, actorId)
+    const evidence = materiallyChanged || patch.revalidate ? checkedEvidence(db, accountId, next, actorId, true)
       : { status: current.evidenceStatus, sourceId: current.sourceId, sourceIds: current.sourceIds,
           validatedBy: current.validatedBy, validatedAt: current.validatedAt };
     db.exec("BEGIN IMMEDIATE");

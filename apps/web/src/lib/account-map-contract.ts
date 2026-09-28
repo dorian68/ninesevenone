@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const MAP_NODE_KINDS = ["person", "unit", "role_slot"] as const;
 export const MAP_UNIT_KINDS = ["account", "group", "company", "headquarters", "subsidiary", "establishment", "department", "external"] as const;
-export const MAP_RELATION_KINDS = ["works_in", "reports_to", "functional_reports_to", "part_of", "can_introduce", "advises"] as const;
+export const MAP_RELATION_KINDS = ["unqualified", "works_in", "reports_to", "functional_reports_to", "part_of", "can_introduce", "advises"] as const;
 export const MAP_EVIDENCE_STATUSES = ["observed", "confirmed", "hypothesis", "contradictory", "obsolete"] as const;
 export const MAP_VIEWS = ["organization", "decision"] as const;
 export const MAP_SOURCE_KINDS = ["screenshot", "document", "meeting_note", "web_page", "crm_note", "other"] as const;

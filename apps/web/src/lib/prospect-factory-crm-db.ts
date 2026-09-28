@@ -1114,6 +1114,96 @@ function getDatabase() {
       throw error;
     }
   }
+  // SQLite cannot widen a CHECK constraint in place. Rebuild only the map
+  // relations table so existing CRM records, evidence, and import journals
+  // keep their identifiers and provenance unchanged.
+  if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 7) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      // Recheck after acquiring the writer lock: another server process may
+      // have finished the migration while this one was waiting.
+      if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 7) {
+        db.exec(`
+          CREATE TABLE prospect_factory_map_relations_v7 (
+            id TEXT PRIMARY KEY,
+            prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+            from_node_id TEXT NOT NULL REFERENCES prospect_factory_map_nodes(id) ON DELETE CASCADE,
+            to_node_id TEXT NOT NULL REFERENCES prospect_factory_map_nodes(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK(kind IN ('unqualified','works_in','reports_to','functional_reports_to','part_of','can_introduce','advises')),
+            opportunity_id TEXT REFERENCES prospect_factory_map_opportunities(id) ON DELETE CASCADE,
+            evidence_status TEXT NOT NULL DEFAULT 'hypothesis' CHECK(evidence_status IN ('observed','confirmed','hypothesis','contradictory','obsolete')),
+            source_id TEXT REFERENCES prospect_factory_map_sources(id) ON DELETE SET NULL,
+            source_ids_json TEXT NOT NULL DEFAULT '[]',
+            label TEXT,
+            notes TEXT NOT NULL DEFAULT '',
+            locator TEXT,
+            excerpt TEXT,
+            justification TEXT,
+            verification_question TEXT,
+            validated_by TEXT,
+            validated_at TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK(from_node_id <> to_node_id)
+          );
+          INSERT INTO prospect_factory_map_relations_v7
+            (id,prospect_id,from_node_id,to_node_id,kind,opportunity_id,evidence_status,source_id,source_ids_json,
+             label,notes,locator,excerpt,justification,verification_question,validated_by,validated_at,version,created_at,updated_at)
+          SELECT id,prospect_id,from_node_id,to_node_id,kind,opportunity_id,evidence_status,source_id,source_ids_json,
+                 label,notes,locator,excerpt,justification,verification_question,validated_by,validated_at,version,created_at,updated_at
+          FROM prospect_factory_map_relations;
+          DROP TRIGGER prospect_factory_map_evidence_scope_insert;
+          DROP TABLE prospect_factory_map_relations;
+          ALTER TABLE prospect_factory_map_relations_v7 RENAME TO prospect_factory_map_relations;
+          CREATE INDEX prospect_factory_map_relations_account_idx
+            ON prospect_factory_map_relations(prospect_id, opportunity_id, kind);
+          CREATE UNIQUE INDEX prospect_factory_map_unqualified_unique_idx
+            ON prospect_factory_map_relations(prospect_id, MIN(from_node_id, to_node_id), MAX(from_node_id, to_node_id), COALESCE(opportunity_id, ''))
+            WHERE kind='unqualified';
+          CREATE TRIGGER prospect_factory_map_relations_scope_insert
+          BEFORE INSERT ON prospect_factory_map_relations
+          WHEN NOT EXISTS (SELECT 1 FROM prospect_factory_map_nodes n WHERE n.id=NEW.from_node_id AND n.prospect_id=NEW.prospect_id)
+            OR NOT EXISTS (SELECT 1 FROM prospect_factory_map_nodes n WHERE n.id=NEW.to_node_id AND n.prospect_id=NEW.prospect_id)
+            OR (NEW.opportunity_id IS NOT NULL AND NOT EXISTS
+                  (SELECT 1 FROM prospect_factory_map_opportunities o WHERE o.id=NEW.opportunity_id AND o.prospect_id=NEW.prospect_id))
+            OR (NEW.source_id IS NOT NULL AND NOT EXISTS
+                  (SELECT 1 FROM prospect_factory_map_sources s WHERE s.id=NEW.source_id AND s.prospect_id=NEW.prospect_id))
+          BEGIN SELECT RAISE(ABORT, 'account_map_cross_account_reference'); END;
+          CREATE TRIGGER prospect_factory_map_relations_scope_update
+          BEFORE UPDATE ON prospect_factory_map_relations
+          WHEN NOT EXISTS (SELECT 1 FROM prospect_factory_map_nodes n WHERE n.id=NEW.from_node_id AND n.prospect_id=NEW.prospect_id)
+            OR NOT EXISTS (SELECT 1 FROM prospect_factory_map_nodes n WHERE n.id=NEW.to_node_id AND n.prospect_id=NEW.prospect_id)
+            OR (NEW.opportunity_id IS NOT NULL AND NOT EXISTS
+                  (SELECT 1 FROM prospect_factory_map_opportunities o WHERE o.id=NEW.opportunity_id AND o.prospect_id=NEW.prospect_id))
+            OR (NEW.source_id IS NOT NULL AND NOT EXISTS
+                  (SELECT 1 FROM prospect_factory_map_sources s WHERE s.id=NEW.source_id AND s.prospect_id=NEW.prospect_id))
+          BEGIN SELECT RAISE(ABORT, 'account_map_cross_account_reference'); END;
+          CREATE TRIGGER prospect_factory_map_relations_evidence_delete
+          AFTER DELETE ON prospect_factory_map_relations
+          BEGIN DELETE FROM prospect_factory_map_evidence_sources
+            WHERE subject_kind='relation' AND subject_id=OLD.id; END;
+          CREATE TRIGGER prospect_factory_map_evidence_scope_insert
+          BEFORE INSERT ON prospect_factory_map_evidence_sources
+          WHEN NOT EXISTS (SELECT 1 FROM prospect_factory_map_sources s WHERE s.id=NEW.source_id AND s.prospect_id=NEW.prospect_id)
+            OR (NEW.subject_kind='relation' AND NOT EXISTS
+                  (SELECT 1 FROM prospect_factory_map_relations r WHERE r.id=NEW.subject_id AND r.prospect_id=NEW.prospect_id))
+            OR (NEW.subject_kind='claim' AND NOT EXISTS
+                  (SELECT 1 FROM prospect_factory_map_claims c WHERE c.id=NEW.subject_id AND c.prospect_id=NEW.prospect_id))
+            OR (NEW.subject_kind='stakeholder_role' AND NOT EXISTS
+                  (SELECT 1 FROM prospect_factory_map_stakeholder_roles r WHERE r.id=NEW.subject_id AND r.prospect_id=NEW.prospect_id))
+          BEGIN SELECT RAISE(ABORT, 'account_map_cross_account_reference'); END;
+          PRAGMA user_version = 7;
+        `);
+        const foreignKeyViolation = db.prepare("PRAGMA foreign_key_check").get();
+        if (foreignKeyViolation) throw new Error("La migration des liens a révélé une référence invalide.");
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   return db;
 }
 

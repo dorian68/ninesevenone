@@ -331,4 +331,22 @@ describe("account-map import", () => {
       WHERE relation.prospect_id=?`).get(saved.id));
     expect(relation).toEqual({ kind: "works_in", from_kind: "role_slot", to_kind: "unit" });
   });
+
+  it("imports a neutral link without inventing a hierarchy or contact", () => {
+    const saved = account();
+    const value = document(saved.id);
+    value.people = [];
+    value.relations = [{ from_ref: "tmp:unit:admin", to_ref: "tmp:slot:budget", kind: "unqualified",
+      opportunity_id: null, evidence: { status: "hypothesis", source_ids: [],
+        justification: "Relation à préciser", verification_question: "Quel est le lien exact ?" } }];
+    const preview = previewAccountMapImport(saved.id, value);
+    expect(preview.items.find((entry) => entry.id === "relation:0")).toMatchObject({
+      action: "create", detail: "Lien neutre à qualifier ensuite, sans hiérarchie supposée."
+    });
+    applyDefaults(saved.id, value);
+    expect(listProspectContacts(saved.id)).toHaveLength(0);
+    const relation = withAccountMapDatabase((db) => db.prepare(`SELECT kind,evidence_status FROM prospect_factory_map_relations
+      WHERE prospect_id=?`).get(saved.id));
+    expect(relation).toEqual({ kind: "unqualified", evidence_status: "hypothesis" });
+  });
 });

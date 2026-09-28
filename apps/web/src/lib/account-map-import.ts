@@ -290,7 +290,8 @@ function buildPreview(db: DatabaseSync, routeAccountId: string, document: Accoun
     items.push(item(`relation:${index}`, "relation", `${relation.from_ref} → ${relation.to_ref}`,
       disputed || risky && relation.evidence.status === "hypothesis" ? "conflict" : "create",
       disputed ? "Une relation confirmée est contestée ; arbitrage requis sans écrasement."
-        : risky ? "Lien hiérarchique ou fonctionnel : vérifier la preuve et le sens." : "Lien typé et dirigé."));
+        : risky ? "Lien hiérarchique ou fonctionnel : vérifier la preuve et le sens."
+          : relation.kind === "unqualified" ? "Lien neutre à qualifier ensuite, sans hiérarchie supposée." : "Lien typé et dirigé."));
   });
   document.opportunity_roles.forEach((role, index) => items.push(item(`role:${index}`, "opportunity_role", `${role.person_ref} — ${role.role}`,
     role.role === "confirmed_champion" ? "reject" : "create",
@@ -441,7 +442,8 @@ function addRelation(db: DatabaseSync, batchId: string, document: AccountMapImpo
   if (!from || !to || from.prospect_id !== document.account_id || to.prospect_id !== document.account_id) {
     throw new AccountMapImportError("Relation vers un nœud absent ou un autre compte.", "INVALID_RELATION_REFERENCE");
   }
-  const validKinds = kind === "works_in" ? ["person", "role_slot"].includes(from.kind) && to.kind === "unit"
+  const validKinds = kind === "unqualified" ? true
+    : kind === "works_in" ? ["person", "role_slot"].includes(from.kind) && to.kind === "unit"
     : kind === "part_of" ? from.kind === "unit" && to.kind === "unit"
       : kind === "advises" ? from.kind === "person" && ["person", "unit"].includes(to.kind)
         : from.kind === "person" && to.kind === "person";

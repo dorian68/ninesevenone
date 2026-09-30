@@ -8,6 +8,7 @@ import type { ProspectActivityStats, ProspectPipelineCounts, ProspectPriority, P
 import { ProspectCrmDrawer } from "./prospect-crm-drawer";
 import { MarketView } from "./market-view";
 import { AccountMapWorkspace } from "./account-map";
+import { trackingViewFromValue, type TrackingView } from "./prospect-navigation";
 import styles from "./prospect-factory.module.css";
 
 type OverviewResponse = {
@@ -81,6 +82,10 @@ function qualificationTierLabel(value: ProspectQualificationTier | null | undefi
 
 function qualificationConfidenceLabel(value: ProspectQualificationConfidence | null | undefined) {
   return value ? confidenceLabels[value] : "Confiance à confirmer";
+}
+
+function contactCount(prospect: TrackedProspect) {
+  return prospect.contacts.length + Number(Boolean(prospect.legacyContact));
 }
 
 const localColumnDefinitions: Array<{ key: LocalColumn; label: string; placeholder: string }> = [
@@ -227,6 +232,36 @@ function filtersFromLocation() {
 function pageSizeFromLocation() {
   const parsed = Number(new URLSearchParams(window.location.search).get("limit") ?? 50);
   return [25, 50, 100].includes(parsed) ? parsed : 50;
+}
+
+const explorerQueryKeys = ["country", "territory", "vertical", "origin", "certification", "contact", "minScore", "query", "limit"] as const;
+
+function explorerFiltersInLocation() {
+  const parameters = new URLSearchParams(window.location.search);
+  return explorerQueryKeys.some((key) => parameters.has(key));
+}
+
+function trackingFiltersFromLocation(parameters: URLSearchParams): ProspectFactoryFilters {
+  const certification = parameters.get("crmCertification");
+  const contact = parameters.get("crmContact");
+  const score = Number(parameters.get("crmMinScore") ?? 0);
+  return {
+    query: parameters.get("crmQuery")?.slice(0, 120) || undefined,
+    country: parameters.get("crmCountry") || undefined,
+    territory: parameters.get("crmTerritory") || undefined,
+    vertical: parameters.get("crmVertical") || undefined,
+    origin: parameters.get("crmOrigin") || undefined,
+    certification: certification && ["gold", "silver", "bronze", "blocked"].includes(certification) ? certification as ProspectFactoryFilters["certification"] : undefined,
+    contact: contact && ["any", "email", "phone", "website", "no_website"].includes(contact) ? contact as ProspectFactoryFilters["contact"] : undefined,
+    minScore: Number.isFinite(score) && score >= 0 && score <= 100 ? score : 0
+  };
+}
+
+function replaceExplorerLocation(filters: ProspectFactoryFilters, limit: number) {
+  const parameters = new URLSearchParams(window.location.search);
+  for (const key of explorerQueryKeys) parameters.delete(key);
+  for (const [key, value] of paramsFor(filters, { limit })) parameters.set(key, value);
+  window.history.replaceState(window.history.state, "", `${window.location.pathname}?${parameters}`);
 }
 
 function fallbackFacet(rows: ProspectQualitySnapshot["dimensions"]["countries"] | undefined) {
@@ -378,7 +413,7 @@ function ManualProspectForm({ onClose, onCreated }: ManualProspectFormProps) {
     }
   }
 
-  return <div className={styles.manualOverlay} role="presentation" onClick={(event) => { if (event.target === event.currentTarget) requestClose(); }}><section className={styles.manualCard} role="dialog" aria-modal="true" aria-labelledby="manual-prospect-title" onKeyDown={trapFocus} onClick={(event) => event.stopPropagation()}><header className={styles.manualHeader}><div><span>Ajout CRM</span><h2 id="manual-prospect-title">Ajouter un prospect</h2><p>Crée une fiche indépendante du référentiel initial, conservée dans le suivi commercial.</p></div><button ref={closeButtonRef} type="button" className={styles.iconButton} onClick={requestClose} aria-label="Fermer"><X size={18} /></button></header><form onSubmit={(event) => void submit(event)}><div className={styles.manualFormGrid}><div className={styles.manualSectionTitle}><span>Compte</span><p>Identité, localisation et activité observée.</p></div><label className={styles.manualFullField}>Entreprise<input value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Nom de l’entreprise" maxLength={240} required autoFocus /></label><label>Nom commercial<input value={commercialName} onChange={(event) => setCommercialName(event.target.value)} placeholder="Optionnel" maxLength={240} /></label><label>Pays<input value={country} onChange={(event) => setCountry(event.target.value)} placeholder="Ex. États-Unis" maxLength={120} required /></label><label>Territoire<input value={territory} onChange={(event) => setTerritory(event.target.value)} placeholder="Ex. Californie ou Guadeloupe" maxLength={120} required /></label><label>Région / État<input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="Ex. West Coast" maxLength={120} /></label><label>Ville<input value={city} onChange={(event) => setCity(event.target.value)} placeholder="Ex. Les Abymes" maxLength={120} /></label><label>Activité<input value={vertical} onChange={(event) => setVertical(event.target.value)} placeholder="Ex. BTP, conseil…" maxLength={180} /></label><label>Détail d’activité<input value={activityDetail} onChange={(event) => setActivityDetail(event.target.value)} placeholder="Produits, modèle économique…" maxLength={500} /></label><label>Tranche d’effectif<input value={employeeRange} onChange={(event) => setEmployeeRange(event.target.value)} placeholder="Ex. 51–100" maxLength={80} /></label><div className={styles.manualSectionTitle}><span>Contact et pilotage</span><p>Les champs de recherche détaillée restent disponibles dans la fiche après création.</p></div><label>Contact<input value={contactName} onChange={(event) => setContactName(event.target.value)} placeholder="Nom du contact" maxLength={180} /></label><label>E-mail<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="contact@entreprise.fr" maxLength={320} /></label><label>Téléphone<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+590 …" maxLength={60} /></label><label>Site web<input type="url" value={website} onChange={(event) => setWebsite(event.target.value)} placeholder="https://…" maxLength={2_048} /></label><label>Étape<select value={status} onChange={(event) => setStatus(event.target.value as ProspectQualificationStatus)}>{(Object.keys(qualificationLabels) as ProspectQualificationStatus[]).map((value) => <option key={value} value={value} disabled={statusRequiresLoggedActivity(value)}>{qualificationLabels[value]}{statusRequiresLoggedActivity(value) ? " · via activité" : ""}</option>)}</select></label><label>Priorité<select value={priority} onChange={(event) => setPriority(event.target.value as ProspectPriority)}><option value="high">Haute</option><option value="normal">Normale</option><option value="low">Basse</option></select></label><label>Responsable<input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="Qui suit cette fiche ?" maxLength={180} /></label><label>Campagne<input value={campaign} onChange={(event) => setCampaign(event.target.value)} placeholder="Ex. BTP · septembre" maxLength={180} /></label><label>Valeur potentielle (€)<input type="number" min="0" max="1000000000" step="100" value={potentialValue} onChange={(event) => setPotentialValue(event.target.value)} placeholder="Ex. 5000" /></label><label>Probabilité (%)<input type="number" min="0" max="100" step="5" value={probability} onChange={(event) => setProbability(event.target.value)} placeholder="Ex. 40" /></label><label className={styles.manualFullField}>Notes<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Contexte, besoin, prochaine information utile…" rows={4} maxLength={20_000} /></label></div>{error ? <div className={styles.alert} role="alert"><CircleAlert size={17} />{error}</div> : null}<footer className={styles.manualActions}><button type="button" className={styles.secondary} onClick={requestClose} disabled={saving}>Annuler</button><button type="submit" className={styles.primary} disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer dans le suivi"}</button></footer></form></section></div>;
+  return <div className={styles.manualOverlay} role="presentation" onClick={(event) => { if (event.target === event.currentTarget) requestClose(); }}><section className={styles.manualCard} role="dialog" aria-modal="true" aria-labelledby="manual-prospect-title" onKeyDown={trapFocus} onClick={(event) => event.stopPropagation()}><header className={styles.manualHeader}><div><span>Ajout CRM</span><h2 id="manual-prospect-title">Ajouter une société au suivi</h2><p>Crée une fiche société indépendante du référentiel initial. Pour une société déjà suivie, ajoutez les personnes dans la vue Cartographie afin de les rattacher au même compte.</p></div><button ref={closeButtonRef} type="button" className={styles.iconButton} onClick={requestClose} aria-label="Fermer"><X size={18} /></button></header><form onSubmit={(event) => void submit(event)}><div className={styles.manualFormGrid}><div className={styles.manualSectionTitle}><span>Compte</span><p>Identité, localisation et activité observée.</p></div><label className={styles.manualFullField}>Entreprise<input value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Nom de l’entreprise" maxLength={240} required autoFocus /></label><label>Nom commercial<input value={commercialName} onChange={(event) => setCommercialName(event.target.value)} placeholder="Optionnel" maxLength={240} /></label><label>Pays<input value={country} onChange={(event) => setCountry(event.target.value)} placeholder="Ex. États-Unis" maxLength={120} required /></label><label>Territoire<input value={territory} onChange={(event) => setTerritory(event.target.value)} placeholder="Ex. Californie ou Guadeloupe" maxLength={120} required /></label><label>Région / État<input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="Ex. West Coast" maxLength={120} /></label><label>Ville<input value={city} onChange={(event) => setCity(event.target.value)} placeholder="Ex. Les Abymes" maxLength={120} /></label><label>Activité<input value={vertical} onChange={(event) => setVertical(event.target.value)} placeholder="Ex. BTP, conseil…" maxLength={180} /></label><label>Détail d’activité<input value={activityDetail} onChange={(event) => setActivityDetail(event.target.value)} placeholder="Produits, modèle économique…" maxLength={500} /></label><label>Tranche d’effectif<input value={employeeRange} onChange={(event) => setEmployeeRange(event.target.value)} placeholder="Ex. 51–100" maxLength={80} /></label><div className={styles.manualSectionTitle}><span>Contact et pilotage</span><p>Les champs de recherche détaillée restent disponibles dans la fiche après création.</p></div><label>Contact<input value={contactName} onChange={(event) => setContactName(event.target.value)} placeholder="Nom du contact" maxLength={180} /></label><label>E-mail<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="contact@entreprise.fr" maxLength={320} /></label><label>Téléphone<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+590 …" maxLength={60} /></label><label>Site web<input type="url" value={website} onChange={(event) => setWebsite(event.target.value)} placeholder="https://…" maxLength={2_048} /></label><label>Étape<select value={status} onChange={(event) => setStatus(event.target.value as ProspectQualificationStatus)}>{(Object.keys(qualificationLabels) as ProspectQualificationStatus[]).map((value) => <option key={value} value={value} disabled={statusRequiresLoggedActivity(value)}>{qualificationLabels[value]}{statusRequiresLoggedActivity(value) ? " · via activité" : ""}</option>)}</select></label><label>Priorité<select value={priority} onChange={(event) => setPriority(event.target.value as ProspectPriority)}><option value="high">Haute</option><option value="normal">Normale</option><option value="low">Basse</option></select></label><label>Responsable<input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="Qui suit cette fiche ?" maxLength={180} /></label><label>Campagne<input value={campaign} onChange={(event) => setCampaign(event.target.value)} placeholder="Ex. BTP · septembre" maxLength={180} /></label><label>Valeur potentielle (€)<input type="number" min="0" max="1000000000" step="100" value={potentialValue} onChange={(event) => setPotentialValue(event.target.value)} placeholder="Ex. 5000" /></label><label>Probabilité (%)<input type="number" min="0" max="100" step="5" value={probability} onChange={(event) => setProbability(event.target.value)} placeholder="Ex. 40" /></label><label className={styles.manualFullField}>Notes<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Contexte, besoin, prochaine information utile…" rows={4} maxLength={20_000} /></label></div>{error ? <div className={styles.alert} role="alert"><CircleAlert size={17} />{error}</div> : null}<footer className={styles.manualActions}><button type="button" className={styles.secondary} onClick={requestClose} disabled={saving}>Annuler</button><button type="submit" className={styles.primary} disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer dans le suivi"}</button></footer></form></section></div>;
 }
 
 export function ProspectFactory() {
@@ -388,6 +423,8 @@ export function ProspectFactory() {
   const [token, setToken] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [view, setView] = useState<View>("explore");
+  const [navigationReady, setNavigationReady] = useState(false);
+  const [drawerToRestore, setDrawerToRestore] = useState<string | null>(null);
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProspectFactoryFilters>(emptyFilters);
@@ -413,7 +450,7 @@ export function ProspectFactory() {
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [trackingStatsError, setTrackingStatsError] = useState<string | null>(null);
   const [trackingStatus, setTrackingStatus] = useState<ProspectQualificationStatus | "">("");
-  const [trackingViewMode, setTrackingViewMode] = useState<"rows" | "kanban" | "market" | "map">("market");
+  const [trackingViewMode, setTrackingViewMode] = useState<TrackingView>("market");
   const [marketRefreshToken, setMarketRefreshToken] = useState(0);
   const [trackingPriority, setTrackingPriority] = useState<ProspectPriority | "">("");
   const [trackingDraftFilters, setTrackingDraftFilters] = useState<ProspectFactoryFilters>({});
@@ -421,7 +458,7 @@ export function ProspectFactory() {
   const [trackingOffset, setTrackingOffset] = useState(0);
   const [trackingPageSize, setTrackingPageSize] = useState(25);
   const [selectedProspect, setSelectedProspect] = useState<ProspectFactoryRow | null>(null);
-  const [selectedProspectTab, setSelectedProspectTab] = useState<"tracking" | "activity" | undefined>(undefined);
+  const [selectedProspectTab, setSelectedProspectTab] = useState<"tracking" | "research" | "record" | "activity" | undefined>(undefined);
   const [selectedActivityContactId, setSelectedActivityContactId] = useState<string | null>(null);
   const [manualProspectOpen, setManualProspectOpen] = useState(false);
   const [dismissBusyId, setDismissBusyId] = useState<string | null>(null);
@@ -454,7 +491,7 @@ export function ProspectFactory() {
     const controller = new AbortController();
     trackingRequestRef.current = controller;
     const parameters = new URLSearchParams({ limit: String(trackingPageSize), offset: String(trackingOffset) });
-    if (trackingStatus) parameters.set("status", trackingStatus);
+    if (trackingStatus && trackingViewMode !== "kanban") parameters.set("status", trackingStatus);
     if (trackingPriority) parameters.set("priority", trackingPriority);
     for (const [key, value] of Object.entries(trackingAppliedFilters)) {
       if (value !== undefined && value !== "" && value !== 0) parameters.set(key, String(value));
@@ -486,7 +523,7 @@ export function ProspectFactory() {
     } finally {
       if (trackingRequestRef.current === controller) setTrackingLoading(false);
     }
-  }, [trackingAppliedFilters, trackingOffset, trackingPageSize, trackingPriority, trackingStatus]);
+  }, [trackingAppliedFilters, trackingOffset, trackingPageSize, trackingPriority, trackingStatus, trackingViewMode]);
 
   const search = useCallback(async (filters: ProspectFactoryFilters, cursor: string | null = null, limit = 50, targetPage = 0) => {
     requestRef.current?.abort();
@@ -517,12 +554,31 @@ export function ProspectFactory() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const initial = window.location.search ? filtersFromLocation() : emptyFilters;
+      const parameters = new URLSearchParams(window.location.search);
+      const initial = explorerFiltersInLocation() ? filtersFromLocation() : emptyFilters;
       const initialPageSize = pageSizeFromLocation();
       setSegments(readSegments());
       setDraft(initial);
       setApplied(initial);
       setPageSize(initialPageSize);
+      const workspace = parameters.get("workspace");
+      if (workspace === "tracking" || workspace === "quality" || workspace === "segments") setView(workspace);
+      const restoredTrackingFilters = trackingFiltersFromLocation(parameters);
+      setTrackingDraftFilters(restoredTrackingFilters);
+      setTrackingAppliedFilters(restoredTrackingFilters);
+      setTrackingViewMode(trackingViewFromValue(parameters.get("crmView")));
+      const restoredStatus = parameters.get("crmStatus");
+      if (restoredStatus && restoredStatus in qualificationLabels) setTrackingStatus(restoredStatus as ProspectQualificationStatus);
+      const restoredPriority = parameters.get("crmPriority");
+      if (restoredPriority && restoredPriority in priorityLabels) setTrackingPriority(restoredPriority as ProspectPriority);
+      const restoredLimit = Number(parameters.get("crmLimit"));
+      if ([25, 50, 100].includes(restoredLimit)) setTrackingPageSize(restoredLimit);
+      const restoredOffset = Number(parameters.get("crmOffset"));
+      if (Number.isSafeInteger(restoredOffset) && restoredOffset >= 0 && restoredOffset <= 10_000_000) setTrackingOffset(restoredOffset);
+      const restoredDrawerTab = parameters.get("crmDrawerTab");
+      if (restoredDrawerTab === "tracking" || restoredDrawerTab === "research" || restoredDrawerTab === "record" || restoredDrawerTab === "activity") setSelectedProspectTab(restoredDrawerTab);
+      setDrawerToRestore(parameters.get("crmDrawer"));
+      setNavigationReady(true);
       fetch("/api/admin/session", { cache: "no-store" }).then(async (response) => {
         if (!response.ok) throw new Error("Vérification de session impossible.");
         const session = await response.json() as { configured: boolean; authenticated: boolean; role: string | null };
@@ -535,6 +591,43 @@ export function ProspectFactory() {
     }, 0);
     return () => { window.clearTimeout(timer); requestRef.current?.abort(); facetRequestRef.current?.abort(); trackingRequestRef.current?.abort(); };
   }, [loadOverview, search]);
+
+  useEffect(() => {
+    if (!navigationReady) return;
+    const parameters = new URLSearchParams(window.location.search);
+    parameters.set("workspace", view);
+    parameters.set("crmView", trackingViewMode);
+    parameters.set("crmLimit", String(trackingPageSize));
+    if (trackingOffset) parameters.set("crmOffset", String(trackingOffset)); else parameters.delete("crmOffset");
+    if (trackingStatus) parameters.set("crmStatus", trackingStatus); else parameters.delete("crmStatus");
+    if (trackingPriority) parameters.set("crmPriority", trackingPriority); else parameters.delete("crmPriority");
+    const filterParameters: Array<[string, string | number | undefined]> = [
+      ["crmQuery", trackingAppliedFilters.query], ["crmCountry", trackingAppliedFilters.country],
+      ["crmTerritory", trackingAppliedFilters.territory], ["crmVertical", trackingAppliedFilters.vertical],
+      ["crmOrigin", trackingAppliedFilters.origin], ["crmCertification", trackingAppliedFilters.certification],
+      ["crmContact", trackingAppliedFilters.contact], ["crmMinScore", trackingAppliedFilters.minScore]
+    ];
+    for (const [key, value] of filterParameters) {
+      if (value !== undefined && value !== "" && value !== 0) parameters.set(key, String(value));
+      else parameters.delete(key);
+    }
+    const next = `${window.location.pathname}?${parameters}`;
+    if (`${window.location.pathname}${window.location.search}` !== next) window.history.replaceState(window.history.state, "", next);
+  }, [navigationReady, view, trackingViewMode, trackingPageSize, trackingOffset, trackingStatus, trackingPriority, trackingAppliedFilters]);
+
+  useEffect(() => {
+    if (!authorized || !drawerToRestore) return;
+    const controller = new AbortController();
+    fetch(`/api/prospect-factory/crm/prospects/${encodeURIComponent(drawerToRestore)}`, { signal: controller.signal, cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Fiche introuvable.");
+        const payload = await response.json() as { prospect: TrackedProspect };
+        if (!controller.signal.aborted) setSelectedProspect(trackedToFactoryRow(payload.prospect));
+      })
+      .catch(() => { /* The workspace still opens if a linked fiche was removed. */ })
+      .finally(() => { if (!controller.signal.aborted) setDrawerToRestore(null); });
+    return () => controller.abort();
+  }, [authorized, drawerToRestore]);
 
   useEffect(() => {
     if (!authorized) return;
@@ -588,7 +681,7 @@ export function ProspectFactory() {
     setApplied(draft);
     setPageCursors([null]);
     setPageIndex(0);
-    window.history.replaceState(null, "", `${window.location.pathname}?${paramsFor(draft, { limit: pageSize })}`);
+    replaceExplorerLocation(draft, pageSize);
     void search(draft, null, pageSize, 0);
   };
 
@@ -600,7 +693,7 @@ export function ProspectFactory() {
     setPageIndex(0);
     setNamingSegment(false);
     setSearchError(null);
-    window.history.replaceState(null, "", `${window.location.pathname}?limit=${pageSize}`);
+    replaceExplorerLocation(cleared, pageSize);
     void search(cleared, null, pageSize, 0);
   };
 
@@ -617,11 +710,8 @@ export function ProspectFactory() {
     setTrackingOffset(0);
   };
 
-  const changeTrackingView = (nextView: "rows" | "kanban" | "market" | "map") => {
-    if (nextView === "kanban" && trackingStatus) {
-      setTrackingStatus("");
-      setTrackingOffset(0);
-    }
+  const changeTrackingView = (nextView: TrackingView) => {
+    if (trackingViewMode === "map" && nextView !== "map") refreshCrm();
     setTrackingViewMode(nextView);
   };
 
@@ -629,7 +719,7 @@ export function ProspectFactory() {
     setPageSize(nextSize);
     setPageCursors([null]);
     setPageIndex(0);
-    window.history.replaceState(null, "", `${window.location.pathname}?${paramsFor(applied, { limit: nextSize })}`);
+    replaceExplorerLocation(applied, nextSize);
     void search(applied, null, nextSize, 0);
   };
 
@@ -861,9 +951,9 @@ export function ProspectFactory() {
       </div> : null}
 
       {view === "tracking" ? <section className={styles.trackingPage}>
-        <header className={styles.pageHeading}><div><span>Espace de travail</span><h1>Suivi commercial <em>{number.format(tracking?.counts.total ?? 0)} prospects</em></h1></div><div className={styles.pageHeadingActions}><button type="button" className={styles.primary} onClick={() => setManualProspectOpen(true)}><Users size={16} /> Ajouter un prospect</button><button type="button" className={styles.refreshTracking} onClick={refreshCrm} disabled={trackingLoading} aria-label="Actualiser le suivi"><RefreshCw className={trackingLoading ? styles.spin : ""} size={16} /><span>Actualiser</span></button></div></header>
+        <header className={styles.pageHeading}><div><span>Espace de travail</span><h1>Suivi commercial <em>{number.format(tracking?.counts.total ?? 0)} comptes suivis</em></h1></div><div className={styles.pageHeadingActions}><button type="button" className={styles.primary} onClick={() => setManualProspectOpen(true)}><Users size={16} /> Ajouter une société</button><button type="button" className={styles.refreshTracking} onClick={refreshCrm} disabled={trackingLoading} aria-label="Actualiser le suivi"><RefreshCw className={trackingLoading ? styles.spin : ""} size={16} /><span>Actualiser</span></button></div></header>
         <div className={styles.trackingViewBar}>
-          <div><strong>Mes prospects</strong><span>{trackingViewMode === "rows" ? "Liste détaillée" : trackingViewMode === "kanban" ? "Pipeline par étape commerciale" : trackingViewMode === "market" ? "ICP, segments et comptes" : "Organisation et décision par compte"}</span></div>
+          <div><strong>Mes prospects</strong><span>{trackingViewMode === "rows" ? "Liste détaillée" : trackingViewMode === "kanban" ? "Pipeline par étape commerciale" : trackingViewMode === "map" ? "Organisation et relations du compte" : "ICP, segments et comptes"}</span></div>
           <div className={styles.trackingViewSwitch} role="group" aria-label="Choisir la présentation du suivi commercial">
             <button type="button" aria-pressed={trackingViewMode === "rows"} onClick={() => changeTrackingView("rows")}>Liste</button>
             <button type="button" aria-pressed={trackingViewMode === "kanban"} onClick={() => changeTrackingView("kanban")}>Kanban</button>
@@ -953,7 +1043,7 @@ export function ProspectFactory() {
                     return <button type="button" className={styles.trackingBoardCard} key={prospect.id} onClick={() => setSelectedProspect(trackedToFactoryRow(prospect))} aria-label={`Ouvrir ${name}, ${qualificationLabels[status]}`}>
                       <strong>{name}</strong>
                       {location ? <small>{location}</small> : null}
-                      <span className={styles.trackingBoardContact}>{contactName || "Contact non identifié"}</span>
+                      <span className={styles.trackingBoardContact}>{contactName || "Contact non identifié"}{contactCount(prospect) > 1 ? ` · +${contactCount(prospect) - 1} autre${contactCount(prospect) > 2 ? "s" : ""}` : ""}</span>
                       <span className={styles.trackingBoardPriority}>Priorité {priorityLabels[prospect.qualification.priority].toLowerCase()}</span>
                       <span className={styles.trackingBoardAction}><Clock3 size={14} /><span><small>Prochaine action · {formatOptionalDate(prospect.qualification.nextActionAt)}</small><strong>{prospect.qualification.nextActionLabel || "À planifier"}</strong></span></span>
                       {prospect.qualification.potentialValue !== null ? <span className={styles.trackingBoardValue}>{currency.format(prospect.qualification.potentialValue)}{prospect.qualification.probability !== null ? ` · ${prospect.qualification.probability}%` : ""}</span> : null}
@@ -976,7 +1066,7 @@ export function ProspectFactory() {
             return <button type="button" className={styles.trackingCard} key={prospect.id} onClick={() => setSelectedProspect(trackedToFactoryRow(prospect))} aria-label={`Ouvrir la fiche de ${name} : statut ${statusLabel}, ${scoreLabel}, ${tierLabel}, ${confidenceLabel}`}>
               <span className={styles.trackingIdentity}><strong>{name}</strong><small>{[prospect.snapshot.city, prospect.snapshot.territory, prospect.snapshot.country].filter(Boolean).join(" · ")}</small><span className={styles.trackingIdentityMeta}><span className={`${styles.tierBadge} ${prospect.qualification.tier ? styles[`tier${prospect.qualification.tier}`] : styles.tierPending}`}>{tierLabel}</span><small>{scoreLabel}</small></span></span>
               <span className={styles.trackingStatus}><small className={styles.trackingEyebrow}>Étape</small><span className={`${styles.pipelineBadge} ${styles[prospect.qualification.status]}`}>{statusLabel}</span><small>Priorité {priorityLabels[prospect.qualification.priority].toLowerCase()}{prospect.qualification.potentialValue !== null ? ` · ${currency.format(prospect.qualification.potentialValue)}` : ""}</small></span>
-              <span className={styles.trackingContact}><small className={styles.trackingEyebrow}>Contact</small><strong>{prospect.enrichment.contactName ?? prospect.contacts[0]?.name ?? prospect.snapshot.contactName ?? "À identifier"}</strong><small>{effectiveEmail || effectivePhone || "Coordonnées à compléter"}</small></span>
+              <span className={styles.trackingContact}><small className={styles.trackingEyebrow}>Contact{contactCount(prospect) > 1 ? ` · ${contactCount(prospect)} liés` : ""}</small><strong>{prospect.enrichment.contactName ?? prospect.contacts[0]?.name ?? prospect.snapshot.contactName ?? "À identifier"}</strong><small>{effectiveEmail || effectivePhone || "Coordonnées à compléter"}</small></span>
               <span className={styles.nextAction}><Clock3 size={16} /><span><small className={styles.trackingEyebrow}>Prochaine action · {formatOptionalDate(prospect.qualification.nextActionAt)}</small><strong>{prospect.qualification.nextActionLabel || "À planifier"}</strong><small>{prospect.qualification.lastContactedAt ? `Dernier échange ${formatOptionalDate(prospect.qualification.lastContactedAt)}` : "Aucun échange enregistré"}</small></span></span>
               <ArrowRight size={17} />
             </button>;
@@ -1013,7 +1103,7 @@ export function ProspectFactory() {
 
       {view === "segments" ? <section className={styles.segmentsPage}><div className={styles.pageHeading}><div><span>Requêtes Explorer réutilisables</span><h1>Ciblages enregistrés</h1><p>Un ciblage conserve les filtres d’Explorer. Les segments ICP se gèrent dans la Vue Marché du suivi commercial.</p></div></div>{segments.length ? <div className={styles.segmentGrid}>{segments.map((segment) => <article key={segment.id}><BadgeCheck size={20} /><div><h2>{segment.name}</h2><p>{Object.entries(segment.filters).filter(([, value]) => value !== undefined && value !== "" && value !== 0).map(([key, value]) => `${key}: ${value}`).join(" · ") || "Sans filtre"}</p><small>Créé le {date.format(new Date(segment.createdAt))}</small></div><button type="button" onClick={() => { setDraft(segment.filters); setApplied(segment.filters); setPageCursors([null]); setPageIndex(0); setView("explore"); void search(segment.filters, null, pageSize, 0); }}>Ouvrir <ArrowRight size={15} /></button></article>)}</div> : <div className={styles.emptyState}><BarChart3 size={28} /><h2>Aucun ciblage enregistré</h2><p>Configurez les filtres dans Explorer, puis enregistrez la définition.</p></div>}</section> : null}
       {manualProspectOpen ? <ManualProspectForm onClose={() => setManualProspectOpen(false)} onCreated={(prospect) => { setManualProspectOpen(false); setSelectedProspect(trackedToFactoryRow(prospect)); refreshCrm(); }} /> : null}
-      {selectedProspect ? <ProspectCrmDrawer prospect={selectedProspect} trackingId={selectedProspect.tracking?.id ?? null} initialTab={selectedProspectTab} initialContactId={selectedActivityContactId} onClose={() => { setSelectedProspect(null); setSelectedProspectTab(undefined); setSelectedActivityContactId(null); }} onChanged={refreshCrm} /> : null}
+      {selectedProspect ? <ProspectCrmDrawer prospect={selectedProspect} trackingId={selectedProspect.tracking?.id ?? null} initialTab={selectedProspectTab} initialContactId={selectedActivityContactId} mapReturnView={view === "tracking" ? trackingViewMode : "explore"} onClose={() => { setSelectedProspect(null); setSelectedProspectTab(undefined); setSelectedActivityContactId(null); const parameters = new URLSearchParams(window.location.search); parameters.delete("crmDrawer"); parameters.delete("crmDrawerTab"); window.history.replaceState(window.history.state, "", `${window.location.pathname}?${parameters}`); }} onChanged={refreshCrm} /> : null}
     </main>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { ContextualMapLink } from "./contextual-map-link";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Activity, ArrowRight, Building2, ChevronRight, Layers3, Network, Pencil, Plus, RefreshCw, Search, Trash2, Users, X } from "lucide-react";
@@ -15,9 +15,56 @@ import styles from "./market-view.module.css";
 
 export type MarketViewProps = { onOpenProspect: (prospect: TrackedProspect, tab?: "tracking" | "activity", contactId?: string) => void; refreshToken?: number };
 type Selection = { kind: "overview" } | { kind: "all" } | { kind: "icp"; icpId: string } | { kind: "segment"; icpId: string; segmentId: string } | { kind: "unclassified" } | { kind: "account"; accountId: string } | { kind: "contact"; accountId: string; contactId: string } | { kind: "slot"; accountId: string; slotId: string } | { kind: "activity"; accountId: string; activityId: string };
+type ListScope = { kind: "all" } | { kind: "unclassified" } | { kind: "segment"; icpId: string; segmentId: string };
 type Editor = { kind: "icp"; id?: string } | { kind: "segment"; icpId: string; id?: string } | { kind: "account"; accountId: string } | { kind: "contact"; accountId: string; id?: string } | { kind: "slot"; accountId: string; id?: string } | { kind: "icpPersona"; icpId: string; id?: string };
 type AccountDetail = { prospect: TrackedProspect; activities: ProspectActivity[] };
 type FormValues = Record<string, string>;
+
+function marketNavigationValue(key: string) {
+  return typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get(key) ?? "";
+}
+
+function listScopeFromValue(value: string | null): ListScope | null {
+  if (value === "all" || value === "unclassified") return { kind: value };
+  if (value?.startsWith("segment:")) {
+    const [, icpId, segmentId] = value.split(":");
+    if (icpId && segmentId) return { kind: "segment", icpId, segmentId };
+  }
+  return null;
+}
+
+function listScopeKey(scope: ListScope) { return scope.kind === "segment" ? `s:${scope.segmentId}` : scope.kind; }
+function listScopeValue(scope: ListScope) { return scope.kind === "segment" ? `segment:${scope.icpId}:${scope.segmentId}` : scope.kind; }
+function initialListScope(): ListScope { return listScopeFromValue(marketNavigationValue("crmMarketScope")) ?? { kind: "all" }; }
+function initialExpandedSegments() {
+  const scope = listScopeFromValue(marketNavigationValue("crmMarketScope"));
+  return new Set(scope ? [listScopeKey(scope)] : []);
+}
+function initialExpandedIcps() {
+  const scope = listScopeFromValue(marketNavigationValue("crmMarketScope"));
+  const icpId = scope?.kind === "segment" ? scope.icpId : marketNavigationValue("crmMarketScope").startsWith("icp:") ? marketNavigationValue("crmMarketScope").slice(4) : "";
+  return new Set(icpId ? [icpId] : []);
+}
+function initialListOffsets() {
+  const scope = listScopeFromValue(marketNavigationValue("crmMarketScope"));
+  const offset = Number(marketNavigationValue("crmMarketOffset"));
+  return scope && Number.isSafeInteger(offset) && offset > 0 && offset <= 10_000_000 && offset % pageSize === 0
+    ? { [listScopeKey(scope)]: offset } : {};
+}
+
+function initialMarketSelection(): Selection {
+  if (typeof window === "undefined") return { kind: "overview" };
+  const parameters = new URLSearchParams(window.location.search);
+  const marketAccountId = parameters.get("crmMarketAccount");
+  if (marketAccountId) return { kind: "account", accountId: marketAccountId };
+  const scope = parameters.get("crmMarketScope");
+  const listScope = listScopeFromValue(scope);
+  if (listScope) return listScope;
+  if (scope?.startsWith("icp:")) return { kind: "icp", icpId: scope.slice(4) };
+  const accountId = parameters.get("crmView") === "market" ? parameters.get("crmAccount") : null;
+  if (accountId) return { kind: "account", accountId };
+  return { kind: "overview" };
+}
 
 const number = new Intl.NumberFormat("fr-FR");
 const money = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
@@ -44,22 +91,23 @@ function MetricGrid({ metrics }: { metrics: MarketMetrics }) { const items: Arra
 
 export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps) {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
-  const [selection, setSelection] = useState<Selection>({ kind: "overview" });
-  const [expandedIcps, setExpandedIcps] = useState<Set<string>>(new Set());
-  const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
+  const [selection, setSelection] = useState<Selection>(initialMarketSelection);
+  const [lastListScope, setLastListScope] = useState<ListScope>(initialListScope);
+  const [expandedIcps, setExpandedIcps] = useState<Set<string>>(initialExpandedIcps);
+  const [expandedSegments, setExpandedSegments] = useState<Set<string>>(initialExpandedSegments);
   const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set());
   const [expandedContacts, setExpandedContacts] = useState<Set<string>>(new Set());
   const [pages, setPages] = useState<Record<string, MarketAccountListResult>>({});
-  const [offsets, setOffsets] = useState<Record<string, number>>({});
+  const [offsets, setOffsets] = useState<Record<string, number>>(initialListOffsets);
   const [loadingPages, setLoadingPages] = useState<Set<string>>(new Set());
   const [details, setDetails] = useState<Record<string, AccountDetail>>({});
   const [slots, setSlots] = useState<Record<string, AccountPersonaSlot[]>>({});
-  const [searchDraft, setSearchDraft] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [status, setStatus] = useState<ProspectQualificationStatus | "">("");
-  const [priority, setPriority] = useState<ProspectPriority | "">("");
-  const [signal, setSignal] = useState<ProspectOperationalSignal | "">("");
-  const [minFitScore, setMinFitScore] = useState("");
+  const [searchDraft, setSearchDraft] = useState(() => marketNavigationValue("crmMarketQuery"));
+  const [searchQuery, setSearchQuery] = useState(() => marketNavigationValue("crmMarketQuery"));
+  const [status, setStatus] = useState<ProspectQualificationStatus | "">(() => { const value = marketNavigationValue("crmMarketStatus"); return PROSPECT_QUALIFICATION_STATUSES.includes(value as ProspectQualificationStatus) ? value as ProspectQualificationStatus : ""; });
+  const [priority, setPriority] = useState<ProspectPriority | "">(() => { const value = marketNavigationValue("crmMarketPriority"); return value === "high" || value === "normal" || value === "low" ? value : ""; });
+  const [signal, setSignal] = useState<ProspectOperationalSignal | "">(() => { const value = marketNavigationValue("crmMarketSignal"); return PROSPECT_OPERATIONAL_SIGNALS.includes(value as ProspectOperationalSignal) ? value as ProspectOperationalSignal : ""; });
+  const [minFitScore, setMinFitScore] = useState(() => marketNavigationValue("crmMarketFit"));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -69,6 +117,8 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
   const [refreshIndex, setRefreshIndex] = useState(0);
   const pageRequests = useRef<Record<string, number>>({});
   const detailRequests = useRef<Record<string, number>>({});
+  const requestedOffsets = useRef<Record<string, number>>(offsets);
+  const previousListFilters = useRef(JSON.stringify([searchQuery, status, priority, signal, minFitScore]));
   const modalRef = useRef<HTMLDivElement>(null);
   const icpById = useMemo(() => new Map((overview?.icps ?? []).map((icp) => [icp.id, icp])), [overview]);
   const segmentById = useMemo(() => new Map((overview?.icps ?? []).flatMap((icp) => icp.segments.map((segment) => [segment.id, segment] as const))), [overview]);
@@ -88,7 +138,7 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
     if (key === "unclassified") params.set("unclassified", "true"); else if (key.startsWith("s:")) params.set("segmentId", key.slice(2));
     if (searchQuery) params.set("query", searchQuery); if (status) params.set("status", status); if (priority) params.set("priority", priority);
     if (signal) params.set("signal", signal); if (minFitScore.trim()) params.set("minIcpFitScore", minFitScore.trim());
-    try { const next = await apiJson<MarketAccountListResult>(`/api/prospect-factory/crm/market/accounts?${params}`); if (pageRequests.current[key] !== sequence) return; setPages((current) => ({ ...current, [key]: next })); setOffsets((current) => ({ ...current, [key]: offset })); setError(null); }
+    try { const next = await apiJson<MarketAccountListResult>(`/api/prospect-factory/crm/market/accounts?${params}`); if (pageRequests.current[key] !== sequence) return; requestedOffsets.current[key] = offset; setPages((current) => ({ ...current, [key]: next })); setOffsets((current) => ({ ...current, [key]: offset })); setError(null); }
     catch (caught) { if (pageRequests.current[key] === sequence) setError(caught instanceof Error ? caught.message : "Chargement des comptes impossible."); }
     finally { if (pageRequests.current[key] === sequence) setLoadingPages((current) => { const next = new Set(current); next.delete(key); return next; }); }
   }, [searchQuery, status, priority, signal, minFitScore]);
@@ -101,14 +151,49 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
     catch (caught) { if (detailRequests.current[id] === sequence) setError(caught instanceof Error ? caught.message : "Chargement du compte impossible."); }
   }, []);
   useEffect(() => { void loadOverview(); }, [loadOverview, refreshToken, refreshIndex]);
-  useEffect(() => { for (const key of expandedSegments) void loadAccounts(key, 0); }, [expandedSegments, loadAccounts, refreshToken, refreshIndex]);
+  useEffect(() => {
+    const filterKey = JSON.stringify([searchQuery, status, priority, signal, minFitScore]);
+    if (previousListFilters.current !== filterKey) {
+      previousListFilters.current = filterKey;
+      requestedOffsets.current = {};
+      setOffsets({});
+    }
+    for (const key of expandedSegments) void loadAccounts(key, requestedOffsets.current[key] ?? 0);
+  }, [expandedSegments, loadAccounts, refreshToken, refreshIndex, searchQuery, status, priority, signal, minFitScore]);
   useEffect(() => { if (selectedAccountId) void loadAccount(selectedAccountId); }, [selectedAccountId, loadAccount, refreshToken]);
+  useEffect(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    if (selectedAccountId) parameters.set("crmMarketAccount", selectedAccountId); else parameters.delete("crmMarketAccount");
+    const activeListScope = selection.kind === "all" || selection.kind === "unclassified" || selection.kind === "segment" ? selection : lastListScope;
+    const scope = selection.kind === "overview" ? ""
+      : selection.kind === "icp" ? `icp:${selection.icpId}`
+        : listScopeValue(activeListScope);
+    if (scope) parameters.set("crmMarketScope", scope); else parameters.delete("crmMarketScope");
+    const listOffset = scope && !scope.startsWith("icp:") ? offsets[listScopeKey(activeListScope)] ?? 0 : 0;
+    if (listOffset) parameters.set("crmMarketOffset", String(listOffset)); else parameters.delete("crmMarketOffset");
+    for (const [key, value] of [["crmMarketQuery", searchQuery], ["crmMarketStatus", status], ["crmMarketPriority", priority], ["crmMarketSignal", signal], ["crmMarketFit", minFitScore]]) {
+      if (value) parameters.set(key, value); else parameters.delete(key);
+    }
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}?${parameters}`);
+  }, [selectedAccountId, selection, lastListScope, offsets, searchQuery, status, priority, signal, minFitScore]);
   useEffect(() => { if (!editor) return; const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null; const oldOverflow = document.body.style.overflow; document.body.style.overflow = "hidden"; const frame = requestAnimationFrame(() => modalRef.current?.querySelector<HTMLElement>("input, textarea, select, button")?.focus()); const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setEditor(null); }; document.addEventListener("keydown", onKey); return () => { cancelAnimationFrame(frame); document.removeEventListener("keydown", onKey); document.body.style.overflow = oldOverflow; previous?.focus(); }; }, [editor]);
 
   function selectIcp(icpId: string) { setSelection({ kind: "icp", icpId }); setExpandedIcps((current) => new Set(current).add(icpId)); }
-  function selectAll() { setSelection({ kind: "all" }); setExpandedSegments((current) => new Set(current).add("all")); }
-  function selectSegment(icpId: string, segmentId: string) { setSelection({ kind: "segment", icpId, segmentId }); setExpandedIcps((current) => new Set(current).add(icpId)); setExpandedSegments((current) => new Set(current).add(`s:${segmentId}`)); }
-  function selectAccount(accountId: string) { setSelection({ kind: "account", accountId }); setExpandedAccounts((current) => new Set(current).add(accountId)); }
+  function selectAll() { const scope: ListScope = { kind: "all" }; setLastListScope(scope); setSelection(scope); setExpandedSegments((current) => new Set(current).add("all")); }
+  function selectUnclassified() { const scope: ListScope = { kind: "unclassified" }; setLastListScope(scope); setSelection(scope); setExpandedSegments((current) => new Set(current).add("unclassified")); }
+  function selectSegment(icpId: string, segmentId: string) { const scope: ListScope = { kind: "segment", icpId, segmentId }; setLastListScope(scope); setSelection(scope); setExpandedIcps((current) => new Set(current).add(icpId)); setExpandedSegments((current) => new Set(current).add(`s:${segmentId}`)); }
+  function selectAccount(accountId: string, sourceScope?: ListScope) { if (sourceScope) setLastListScope(sourceScope); setSelection({ kind: "account", accountId }); setExpandedAccounts((current) => new Set(current).add(accountId)); }
+  function returnToResults() {
+    setSelection(lastListScope);
+    setExpandedSegments((current) => new Set(current).add(listScopeKey(lastListScope)));
+    if (lastListScope.kind === "segment") setExpandedIcps((current) => new Set(current).add(lastListScope.icpId));
+  }
+  function scopeForAccountList(key: string, prospect: TrackedProspect): ListScope {
+    if (key === "all" || key === "unclassified") return { kind: key };
+    const segmentId = key.startsWith("s:") ? key.slice(2) : "";
+    const icpId = segmentById.get(segmentId)?.icpId || prospect.market.icpId;
+    return segmentId && icpId ? { kind: "segment", icpId, segmentId } : { kind: "all" };
+  }
   function toggleAccount(accountId: string) { setExpandedAccounts((current) => toggleSet(current, accountId)); if (!details[accountId]) void loadAccount(accountId); }
   function refresh() { setRefreshIndex((current) => current + 1); if (selectedAccountId) void loadAccount(selectedAccountId); }
   function setField(key: string, value: string) { setForm((current) => ({ ...current, [key]: value })); }
@@ -141,7 +226,7 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
     if (!editor || !("id" in editor) || !editor.id) return;
     if (!window.confirm("Supprimer cet élément ? Cette action ne peut pas être annulée.")) return;
     setSaving(true); setFormError(null);
-    try { const url = editor.kind === "icp" ? `/api/prospect-factory/crm/market/icps/${editor.id}` : editor.kind === "segment" ? `/api/prospect-factory/crm/market/segments/${editor.id}` : editor.kind === "contact" ? `/api/prospect-factory/crm/prospects/${editor.accountId}/contacts/${editor.id}` : editor.kind === "slot" ? `/api/prospect-factory/crm/prospects/${editor.accountId}/personas/${editor.id}` : editor.kind === "icpPersona" ? `/api/prospect-factory/crm/market/icps/${editor.icpId}/personas/${editor.id}` : null; if (!url) return; await apiJson(url, { method: "DELETE" }); if (editor.kind === "contact" || editor.kind === "slot") await loadAccount(editor.accountId); setSelection({ kind: "overview" }); setEditor(null); refresh(); }
+    try { const url = editor.kind === "icp" ? `/api/prospect-factory/crm/market/icps/${editor.id}` : editor.kind === "segment" ? `/api/prospect-factory/crm/market/segments/${editor.id}` : editor.kind === "contact" ? `/api/prospect-factory/crm/prospects/${editor.accountId}/contacts/${editor.id}` : editor.kind === "slot" ? `/api/prospect-factory/crm/prospects/${editor.accountId}/personas/${editor.id}` : editor.kind === "icpPersona" ? `/api/prospect-factory/crm/market/icps/${editor.icpId}/personas/${editor.id}` : null; if (!url) return; await apiJson(url, { method: "DELETE" }); if (editor.kind === "contact" || editor.kind === "slot") await loadAccount(editor.accountId); setSelection(editor.kind === "contact" || editor.kind === "slot" ? { kind: "account", accountId: editor.accountId } : editor.kind === "segment" || editor.kind === "icpPersona" ? { kind: "icp", icpId: editor.icpId } : { kind: "overview" }); setEditor(null); refresh(); }
     catch (caught) { setFormError(caught instanceof Error ? caught.message : "Suppression impossible."); }
     finally { setSaving(false); }
   }
@@ -152,8 +237,9 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
       <button type="button" className={styles.treeSelect} onClick={onSelect} aria-current={active ? "page" : undefined}>{icon}<span title={label}>{label}</span>{count !== null ? <span className={styles.treeCount}>{number.format(count)}</span> : null}</button>
     </div>{expanded && children ? <ul className={`${styles.treeGroup} ${styles.treeChildren}`}>{children}</ul> : null}</li>;
   }
-  function accountTree(row: MarketAccountRow) {
+  function accountTree(row: MarketAccountRow, listKey: string) {
     const prospect = details[row.prospect.id]?.prospect ?? row.prospect;
+    const sourceScope = scopeForAccountList(listKey, prospect);
     const activities = details[row.prospect.id]?.activities ?? [];
     const personaSlots = slots[row.prospect.id] ?? row.targetPersonas;
     const unfilled = personaSlots.filter((slot) => !slot.contactId && slot.status !== "not_relevant");
@@ -162,18 +248,18 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
     const children: ReactNode[] = [];
     for (const contact of prospect.contacts) {
       const contactActivities = activities.filter((item) => item.contactId === contact.id);
-      const nestedActivities = contactActivities.map((item) => treeRow(`activity:${item.id}`, item.subject || activityLabels[item.detailType || item.type] || "Activité", null, <Activity size={13} />, selection.kind === "activity" && selection.activityId === item.id, () => setSelection({ kind: "activity", accountId: prospect.id, activityId: item.id })));
-      children.push(treeRow(`contact:${contact.id}`, contact.name, contactActivities.length, <Users size={14} />, selection.kind === "contact" && selection.contactId === contact.id, () => { setSelection({ kind: "contact", accountId: prospect.id, contactId: contact.id }); setExpandedContacts((current) => new Set(current).add(contact.id)); }, expandedContacts.has(contact.id), () => setExpandedContacts((current) => toggleSet(current, contact.id)), nestedActivities));
+      const nestedActivities = contactActivities.map((item) => treeRow(`activity:${item.id}`, item.subject || activityLabels[item.detailType || item.type] || "Activité", null, <Activity size={13} />, selection.kind === "activity" && selection.activityId === item.id, () => { setLastListScope(sourceScope); setSelection({ kind: "activity", accountId: prospect.id, activityId: item.id }); }));
+      children.push(treeRow(`contact:${contact.id}`, contact.name, contactActivities.length, <Users size={14} />, selection.kind === "contact" && selection.contactId === contact.id, () => { setLastListScope(sourceScope); setSelection({ kind: "contact", accountId: prospect.id, contactId: contact.id }); setExpandedContacts((current) => new Set(current).add(contact.id)); }, expandedContacts.has(contact.id), () => setExpandedContacts((current) => toggleSet(current, contact.id)), nestedActivities));
     }
-    for (const slot of unfilled) children.push(treeRow(`slot:${slot.id}`, `${slot.label} · à rechercher`, null, <Users size={14} />, selection.kind === "slot" && selection.slotId === slot.id, () => setSelection({ kind: "slot", accountId: prospect.id, slotId: slot.id })));
-    for (const item of activities.filter((activity) => !activity.contactId)) children.push(treeRow(`activity:${item.id}`, item.subject || activityLabels[item.detailType || item.type] || "Activité", null, <Activity size={13} />, selection.kind === "activity" && selection.activityId === item.id, () => setSelection({ kind: "activity", accountId: prospect.id, activityId: item.id })));
+    for (const slot of unfilled) children.push(treeRow(`slot:${slot.id}`, `${slot.label} · à rechercher`, null, <Users size={14} />, selection.kind === "slot" && selection.slotId === slot.id, () => { setLastListScope(sourceScope); setSelection({ kind: "slot", accountId: prospect.id, slotId: slot.id }); }));
+    for (const item of activities.filter((activity) => !activity.contactId)) children.push(treeRow(`activity:${item.id}`, item.subject || activityLabels[item.detailType || item.type] || "Activité", null, <Activity size={13} />, selection.kind === "activity" && selection.activityId === item.id, () => { setLastListScope(sourceScope); setSelection({ kind: "activity", accountId: prospect.id, activityId: item.id }); }));
     if (expanded && !details[prospect.id]) children.push(<li className={styles.treeHint} key="loading">Chargement des contacts et activités…</li>);
-    return treeRow(`account:${prospect.id}`, accountName(prospect), childCount || row.activityCount, <Building2 size={14} />, selection.kind === "account" && selection.accountId === prospect.id, () => selectAccount(prospect.id), expanded, () => toggleAccount(prospect.id), children);
+    return treeRow(`account:${prospect.id}`, accountName(prospect), childCount || row.activityCount, <Building2 size={14} />, selection.kind === "account" && selection.accountId === prospect.id, () => selectAccount(prospect.id, sourceScope), expanded, () => toggleAccount(prospect.id), children);
   }
   function treeAccounts(key: string) {
     const page = pages[key]; const currentOffset = offsets[key] ?? 0;
     return <>{loadingPages.has(key) && !page ? <li className={styles.treeHint}>Chargement des comptes…</li> : null}
-      {page?.accounts.map(accountTree)}
+      {page?.accounts.map((row) => accountTree(row, key))}
       {page && !page.accounts.length ? <li className={styles.treeHint}>Aucun compte dans ce filtre.</li> : null}
       {page && page.total > pageSize ? <li key={`${key}-pager`} className={styles.treeMore}><button type="button" disabled={currentOffset === 0 || loadingPages.has(key)} onClick={() => void loadAccounts(key, currentOffset - pageSize)}>←</button> {Math.floor(currentOffset / pageSize) + 1}/{Math.ceil(page.total / pageSize)} <button type="button" disabled={currentOffset + pageSize >= page.total || loadingPages.has(key)} onClick={() => void loadAccounts(key, currentOffset + pageSize)}>→</button></li> : null}
     </>;
@@ -187,11 +273,12 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
       {selection.kind === "all" ? <><ChevronRight size={12} /><strong>Tous les comptes</strong></> : null}
       {icp ? <><ChevronRight size={12} /><button type="button" onClick={() => selectIcp(icp.id)}>{icp.name}</button></> : null}
       {segment ? <><ChevronRight size={12} /><button type="button" onClick={() => selectSegment(segment.icpId, segment.id)}>{segment.name}</button></> : null}
-      {selection.kind === "unclassified" || account && !segment ? <><ChevronRight size={12} /><button type="button" onClick={() => setSelection({ kind: "unclassified" })}>Non classés</button></> : null}
+      {selection.kind === "unclassified" || account && !segment ? <><ChevronRight size={12} /><button type="button" onClick={selectUnclassified}>Non classés</button></> : null}
       {account ? <><ChevronRight size={12} /><button type="button" onClick={() => selectAccount(account.id)}>{accountName(account)}</button></> : null}
       {contact ? <><ChevronRight size={12} /><strong>{contact.name}</strong></> : null}
       {selection.kind === "slot" ? <><ChevronRight size={12} /><strong>Persona à rechercher</strong></> : null}
       {selection.kind === "activity" ? <><ChevronRight size={12} /><strong>Activité</strong></> : null}
+      {selectedAccountId ? <><span aria-hidden="true">·</span><button type="button" onClick={returnToResults}>← Retour aux résultats</button></> : null}
     </nav>;
   }
   function accountCards(key: string) {
@@ -199,7 +286,7 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
     return <>{loadingPages.has(key) && !page ? <p className={styles.empty}>Chargement des comptes…</p> : null}
       {page && !page.accounts.length ? <p className={styles.empty}>Aucun compte ne correspond à ces critères.</p> : null}
       {page?.accounts.length ? <ul className={styles.accountList}>{page.accounts.map(({ prospect, lastActivity, targetPersonas }) => <li className={styles.accountCard} key={prospect.id}>
-        <button type="button" onClick={() => selectAccount(prospect.id)}><span><strong>{accountName(prospect)}</strong><small>{[prospect.snapshot.city, prospect.snapshot.territory].filter(Boolean).join(" · ") || prospect.snapshot.country}</small></span><ArrowRight size={16} /></button>
+        <button type="button" onClick={() => selectAccount(prospect.id, scopeForAccountList(key, prospect))}><span><strong>{accountName(prospect)}</strong><small>{[prospect.snapshot.city, prospect.snapshot.territory].filter(Boolean).join(" · ") || prospect.snapshot.country}</small></span><ArrowRight size={16} /></button>
         <div className={styles.accountMeta}><span className={styles.pill}>{statusLabels[prospect.qualification.status]}</span><span className={styles.pill}>Fit {prospect.market.icpFitScore === null ? "à établir" : `${prospect.market.icpFitScore}/100`}</span><span className={styles.pill}>{prospect.contacts.length} contact{prospect.contacts.length > 1 ? "s" : ""}</span><span className={styles.pill}>{targetPersonas.filter((slot) => !slot.contactId && slot.status === "to_find").length} à rechercher</span>{prospect.qualification.status === "opportunity" ? <span className={`${styles.pill} ${styles.pillHigh}`}>Opportunité ouverte</span> : null}</div>
         <p>Dernière activité : {lastActivity ? `${activityLabels[lastActivity.detailType || lastActivity.type] || "Activité"} · ${niceDate(lastActivity.occurredAt)}` : "aucune"} · Prochaine action : {prospect.qualification.nextActionLabel || "à définir"} · {niceDate(prospect.qualification.nextActionAt)}</p>
         {key === "unclassified" ? <button type="button" className={styles.inlineAssign} onClick={() => openEditor({ kind: "account", accountId: prospect.id })}>Classer ce compte <ArrowRight size={14} /></button> : null}
@@ -213,7 +300,7 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
   function overviewPanel() {
     return <><div className={styles.detailHeader}><div><span className={styles.eyebrow}>Cartographie de marché</span><h3>Vos ICP</h3><p>Choisissez un ICP, puis un segment pour travailler ses comptes.</p></div><button type="button" className={styles.button} onClick={() => openEditor({ kind: "icp" })}><Plus size={14} /> Nouvel ICP</button></div>
       {overview?.icps.length ? <ul className={styles.segmentList}>{overview.icps.map((icp) => <li className={styles.segmentCard} key={icp.id}><button type="button" onClick={() => selectIcp(icp.id)}><span><strong>{icp.name}</strong><small>{icp.segments.length} segments · {number.format(icp.metrics.accountCount)} comptes · {number.format(icp.metrics.contactCount)} contacts</small></span><ArrowRight size={16} /></button><p>{icp.description}</p><div className={styles.accountMeta}><span className={styles.pill}>{icp.metrics.responseRate === null ? "Réponse —" : `Réponse ${Math.round(icp.metrics.responseRate * 100)} %`}</span><span className={styles.pill}>{icp.metrics.meetingCount} RDV</span><span className={styles.pill}>{icp.metrics.opportunityCount} opportunités</span><span className={styles.pill}>{icp.metrics.clientCount} clients</span><span className={styles.pill}>Potentiel gagné {money.format(icp.metrics.signedValue)}</span></div></li>)}</ul> : <p className={styles.empty}>Aucun ICP configuré.</p>}
-      <section className={styles.section}><div className={styles.sectionHeader}><h4>Comptes non classés</h4><span>{number.format(overview?.unclassified.accountCount ?? 0)}</span></div><p className={styles.text}>Classez les comptes existants progressivement, sans modifier leur suivi commercial.</p><div className={styles.actions}><button type="button" className={styles.button} onClick={() => { setSelection({ kind: "unclassified" }); setExpandedSegments((current) => new Set(current).add("unclassified")); }}>Voir les non classés <ArrowRight size={14} /></button></div></section>
+      <section className={styles.section}><div className={styles.sectionHeader}><h4>Comptes non classés</h4><span>{number.format(overview?.unclassified.accountCount ?? 0)}</span></div><p className={styles.text}>Classez les comptes existants progressivement, sans modifier leur suivi commercial.</p><div className={styles.actions}><button type="button" className={styles.button} onClick={selectUnclassified}>Voir les non classés <ArrowRight size={14} /></button></div></section>
       <section className={styles.section}><div className={styles.sectionHeader}><h4>Recherche dans tous les comptes</h4></div><p className={styles.text}>Parcourez les comptes classés et non classés dans un même résultat.</p><div className={styles.actions}><button type="button" className={styles.button} onClick={selectAll}>Voir tous les comptes <ArrowRight size={14} /></button></div></section>
     </>;
   }
@@ -242,7 +329,7 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
     const missingSlots = accountSlots.filter((slot) => slot.status === "to_find" && !slot.contactId);
     const website = prospect.enrichment.website || prospect.snapshot.website;
     const websiteHref = safeWebUrl(website);
-    return <><div className={styles.detailHeader}><div><span className={styles.eyebrow}>Compte · {segmentById.get(prospect.market.segmentId || "")?.name || "Non classé"}</span><h3>{accountName(prospect)}</h3><p>{[prospect.snapshot.vertical, prospect.snapshot.city, prospect.snapshot.territory].filter(Boolean).join(" · ")}</p></div><div className={styles.actions}><button type="button" className={styles.button} onClick={() => openEditor({ kind: "account", accountId: prospect.id })}><Pencil size={14} /> Classer</button><Link className={styles.button} href={`/prospects/cartographie/${encodeURIComponent(prospect.id)}`}><Network size={14} /> Cartographie</Link><button type="button" className={styles.primaryButton} onClick={() => onOpenProspect(prospect)}>Fiche complète <ArrowRight size={14} /></button></div></div>
+    return <><div className={styles.detailHeader}><div><span className={styles.eyebrow}>Compte · {segmentById.get(prospect.market.segmentId || "")?.name || "Non classé"}</span><h3>{accountName(prospect)}</h3><p>{[prospect.snapshot.vertical, prospect.snapshot.city, prospect.snapshot.territory].filter(Boolean).join(" · ")}</p></div><div className={styles.actions}><button type="button" className={styles.button} onClick={() => openEditor({ kind: "account", accountId: prospect.id })}><Pencil size={14} /> Classer</button><ContextualMapLink accountId={prospect.id} sourceView="market" className={styles.button}><Network size={14} /> Cartographie</ContextualMapLink><button type="button" className={styles.primaryButton} onClick={() => onOpenProspect(prospect)}>Fiche complète <ArrowRight size={14} /></button></div></div>
       <div className={styles.dataGrid}><div><span>Score ICP / Fit</span><strong>{prospect.market.icpFitScore === null ? "À établir" : `${prospect.market.icpFitScore}/100`}{prospect.market.icpFitReason ? ` · ${prospect.market.icpFitReason}` : ""}</strong></div><div><span>Étape · priorité</span><strong>{statusLabels[prospect.qualification.status]} · {priorityLabels[prospect.qualification.priority]}</strong></div><div><span>Dernière activité</span><strong>{activities.length ? niceDate(activities[0].occurredAt) : "Aucune"}</strong></div><div><span>Prochaine action</span><strong>{prospect.qualification.nextActionLabel || "Action à préciser"} · {niceDate(prospect.qualification.nextActionAt)}</strong></div><div><span>Opportunité ouverte</span><strong>{prospect.qualification.status === "opportunity" ? money.format(prospect.qualification.potentialValue ?? 0) : "Aucune"}</strong></div><div><span>Groupe / identifiant</span><strong>{prospect.market.groupName || "Groupe inconnu"} · {prospect.market.siren || prospect.market.siret || "SIREN à trouver"}</strong></div><div><span>Effectif estimé</span><strong>{prospect.market.employeeCountEstimate ?? prospect.snapshot.employeeRange ?? "Non renseigné"}</strong></div><div><span>Établissements / entités</span><strong>{prospect.market.establishmentCount ?? "—"} / {prospect.market.entityCount ?? "—"}</strong></div><div><span>Site web</span><strong>{websiteHref ? <a href={websiteHref} target="_blank" rel="noreferrer">{new URL(websiteHref).hostname}</a> : website || "À trouver"}</strong></div></div>
       <section className={styles.section}><div className={styles.sectionHeader}><h4>Signaux de complexité opérationnelle</h4><span>{prospect.market.operationalSignals.length}</span></div><div className={styles.tagList}>{prospect.market.operationalSignals.length ? prospect.market.operationalSignals.map((signal) => <span className={styles.tag} key={signal}>{signalLabels[signal]}</span>) : <span className={`${styles.tag} ${styles.tagMuted}`}>À rechercher</span>}</div></section>
       <section className={styles.section}><div className={styles.sectionHeader}><h4>Contacts connus</h4><button type="button" className={styles.button} onClick={() => openEditor({ kind: "contact", accountId: prospect.id })}><Plus size={14} /> Contact</button></div>{sourceContacts.length ? <ul className={styles.peopleList}>{sourceContacts.map((contact) => <li className={styles.personCard} key={contact.id}><button type="button" onClick={() => setSelection({ kind: "contact", accountId: prospect.id, contactId: contact.id })}><span><strong>{contact.name}</strong><small>{contact.verifiedTitle || contact.inputTitle || "Fonction à préciser"}{contact.dealRoles.length ? ` · ${contact.dealRoles.map((role) => roleLabels[role]).join(", ")}` : ""}</small></span><ArrowRight size={14} /></button></li>)}</ul> : <p className={styles.empty}>Aucun contact identifié. {prospect.legacyContact?.name ? `Ancien contact : ${prospect.legacyContact.name}.` : ""}</p>}</section>
@@ -368,7 +455,7 @@ export function MarketView({ onOpenProspect, refreshToken = 0 }: MarketViewProps
         <nav className={styles.tree} aria-label="ICP, segments, entreprises et contacts"><ul className={styles.treeGroup}>
           {treeRow("overview", "Tous les ICP", overview?.icps.length ?? 0, <Layers3 size={14} />, selection.kind === "overview", () => setSelection({ kind: "overview" }))}
           {treeRow("all", "Tous les comptes", overview?.totalAccounts ?? 0, <Building2 size={14} />, selection.kind === "all", selectAll, expandedSegments.has("all"), () => setExpandedSegments((current) => toggleSet(current, "all")), treeAccounts("all"))}
-          {treeRow("unclassified", "Non classés", overview?.unclassified.accountCount ?? 0, <Layers3 size={14} />, selection.kind === "unclassified", () => { setSelection({ kind: "unclassified" }); setExpandedSegments((current) => new Set(current).add("unclassified")); }, expandedSegments.has("unclassified"), () => setExpandedSegments((current) => toggleSet(current, "unclassified")), treeAccounts("unclassified"))}
+          {treeRow("unclassified", "Non classés", overview?.unclassified.accountCount ?? 0, <Layers3 size={14} />, selection.kind === "unclassified", selectUnclassified, expandedSegments.has("unclassified"), () => setExpandedSegments((current) => toggleSet(current, "unclassified")), treeAccounts("unclassified"))}
           {overview?.icps.map((icp) => {
             const segments = icp.segments.map((segment) => treeRow(
               `segment:${segment.id}`, segment.name, segment.metrics.accountCount,

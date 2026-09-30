@@ -2,11 +2,14 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import type { Route } from "next";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowLeft, ArrowRight, Building2, CircleAlert, CircleHelp, ExternalLink, FileJson2, Filter, Network, Plus, RefreshCw, Save, Search, Trash2, UserRound, X } from "lucide-react";
 import type { TrackedProspect } from "@/lib/prospect-factory-crm-contract";
 import { MAP_STAKEHOLDER_ROLES, type AccountMapSnapshot as MapData, type AccountMapNode as MapNode, type AccountMapRelation as MapRelation, type AccountMapOpportunity as MapOpportunity, type MapEvidenceStatus as EvidenceStatus, type MapView } from "@/lib/account-map-contract";
 import type { MapCanvasEdge, MapCanvasNode } from "./account-map-canvas";
+import { ContextualMapLink } from "./contextual-map-link";
+import { accountMapReturnUrl, withAccountMapNavigation, type AccountMapNavigationState } from "./prospect-navigation";
 import styles from "./account-map.module.css";
 
 const Canvas = dynamic(() => import("./account-map-canvas"), { ssr: false, loading: () => <div className={styles.canvasLoading}>Chargement du graphe…</div> });
@@ -97,9 +100,15 @@ function subscribeCompactMap(onChange: () => void) {
 }
 function getCompactMap() { return window.matchMedia(compactMapQuery).matches; }
 function getServerCompactMap() { return false; }
+function initialMapValue(key: string, returnTo?: string) {
+  if (typeof window === "undefined") return "";
+  const direct = new URLSearchParams(window.location.search).get(key);
+  if (direct !== null) return direct;
+  return returnTo ? new URL(returnTo, "https://guad.invalid").searchParams.get(key) || "" : "";
+}
 
 /** Full account map. It is also embedded in the fourth Suivi commercial view. */
-export function AccountMap({ accountId, embedded = false }: { accountId: string; embedded?: boolean }) {
+export function AccountMap({ accountId, embedded = false, returnTo }: { accountId: string; embedded?: boolean; returnTo?: string }) {
   const [map, setMap] = useState<MapData | null>(null);
   const [prospect, setProspect] = useState<TrackedProspect | null>(null);
   const [loading, setLoading] = useState(true);
@@ -108,14 +117,14 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [optimisticLinks, setOptimisticLinks] = useState<OptimisticLink[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
-  const [view, setView] = useState<MapView>("organization");
-  const [opportunityId, setOpportunityId] = useState<string | null>(null);
+  const [view, setView] = useState<MapView>(() => initialMapValue("crmMapMode", returnTo) === "decision" ? "decision" : "organization");
+  const [opportunityId, setOpportunityId] = useState<string | null>(() => initialMapValue("crmMapOpportunity", returnTo) || null);
   const compactMap = useSyncExternalStore(subscribeCompactMap, getCompactMap, getServerCompactMap);
-  const [presentationChoice, setPresentationChoice] = useState<"graph" | "table" | null>(null);
+  const [presentationChoice, setPresentationChoice] = useState<"graph" | "table" | null>(() => { const value = initialMapValue("crmMapPresentation", returnTo); return value === "graph" || value === "table" ? value : null; });
   const presentation = presentationChoice || (compactMap ? "table" : "graph");
-  const [query, setQuery] = useState("");
-  const [kindFilter, setKindFilter] = useState<MapNode["kind"] | "">("");
-  const [statusFilter, setStatusFilter] = useState<EvidenceStatus | "">("");
+  const [query, setQuery] = useState(() => initialMapValue("crmMapNodeQuery", returnTo));
+  const [kindFilter, setKindFilter] = useState<MapNode["kind"] | "">(() => { const value = initialMapValue("crmMapKind", returnTo); return value === "person" || value === "unit" || value === "role_slot" ? value : ""; });
+  const [statusFilter, setStatusFilter] = useState<EvidenceStatus | "">(() => { const value = initialMapValue("crmMapStatus", returnTo); return value in statusLabels ? value as EvidenceStatus : ""; });
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection>(null);
   const [nodeDraft, setNodeDraft] = useState<NodeDraft>(defaultNodeDraft("unit"));
@@ -164,11 +173,18 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
     void fetchAccountMap(accountId).then((result) => {
       if (cancelled) return;
       setMap(result.map); setProspect(result.prospect);
-      setOpportunityId(result.map.opportunities[0]?.id || null); setError(null);
+      setOpportunityId((current) => current && result.map.opportunities.some((item) => item.id === current) ? current : result.map.opportunities[0]?.id || null); setError(null);
     }).catch((caught) => { if (!cancelled) setError(caught instanceof Error ? caught.message : "Chargement de la carte impossible."); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [accountId]);
+  const navigationState: AccountMapNavigationState = { mode: view, presentation: presentationChoice, opportunityId, nodeQuery: query, kind: kindFilter, status: statusFilter };
+  const backHref = withAccountMapNavigation(returnTo || accountMapReturnUrl(accountId, "map"), navigationState);
+  useEffect(() => {
+    const current = `${window.location.pathname}${window.location.search}`;
+    const next = withAccountMapNavigation(current, { mode: view, presentation: presentationChoice, opportunityId, nodeQuery: query, kind: kindFilter, status: statusFilter });
+    if (next !== current) window.history.replaceState(window.history.state, "", next);
+  }, [view, presentationChoice, opportunityId, query, kindFilter, statusFilter]);
   useEffect(() => () => { if (viewportTimer.current) clearTimeout(viewportTimer.current); }, []);
   useEffect(() => {
     if (!selection || !window.matchMedia(compactMapQuery).matches) return;
@@ -337,6 +353,19 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
     setBusy(true); setError(null);
     try { await apiJson(`${base(accountId)}/nodes`, jsonInit("POST", { kind: "person", contactId })); await loadMap(); setNotice("Contact ajouté à la carte."); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Ajout impossible."); }
+    finally { setBusy(false); }
+  }
+  async function attachLegacyContact() {
+    if (!prospect?.legacyContact) return;
+    setBusy(true); setError(null);
+    try {
+      await apiJson(`/api/prospect-factory/crm/prospects/${encodeURIComponent(accountId)}/contacts`, jsonInit("POST", {
+        name: prospect.legacyContact.name,
+        evidenceType: "to_confirm"
+      }));
+      await loadMap();
+      setNotice("Contact historique rattaché à la fiche CRM et à la carte.");
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Le contact historique n’a pas pu être rattaché."); }
     finally { setBusy(false); }
   }
   async function saveRelation(event: FormEvent<HTMLFormElement>) {
@@ -518,19 +547,19 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
     finally { setBusy(false); }
   }
 
-  if (loading && !map) return <div className={styles.loading} role="status"><RefreshCw size={19} className={styles.spin} /> Chargement de la cartographie…</div>;
-  if (!map) return <div className={styles.loading}><CircleAlert size={19} /> {error || "Cartographie indisponible."} <button type="button" onClick={() => { setLoading(true); void loadMap(); }}>Réessayer</button></div>;
+  if (loading && !map) return <div className={styles.loading} role="status">{!embedded ? <Link href={backHref as Route} className={styles.backLink}><ArrowLeft size={15} /> Retour au suivi commercial</Link> : null}<RefreshCw size={19} className={styles.spin} /> Chargement de la cartographie…</div>;
+  if (!map) return <div className={styles.loading}>{!embedded ? <Link href={backHref as Route} className={styles.backLink}><ArrowLeft size={15} /> Retour au suivi commercial</Link> : null}<CircleAlert size={19} /> {error || "Cartographie indisponible."} <button type="button" onClick={() => { setLoading(true); void loadMap(); }}>Réessayer</button></div>;
 
   return <section className={`${styles.root} ${embedded ? styles.embedded : ""}`} aria-label={`Cartographie de ${map.accountName}`}>
     <header className={styles.header}>
       <div className={styles.heading}>
-        {!embedded ? <Link href="/prospects" className={styles.backLink}><ArrowLeft size={15} /> Suivi commercial</Link> : null}
+        {!embedded ? <Link href={backHref as Route} className={styles.backLink}><ArrowLeft size={15} /> Retour au suivi commercial</Link> : null}
         <span className={styles.eyebrow}><Network size={14} /> Cartographie du compte</span>
         <h1>{map.accountName}</h1>
         <p>Personnes, unités et liens · {map.nodes.length} nœud{map.nodes.length > 1 ? "s" : ""} · {map.relations.length} lien{map.relations.length > 1 ? "s" : ""}</p>
       </div>
       <div className={styles.headerActions}>
-        {embedded ? <Link className={styles.button} href={`/prospects/cartographie/${encodeURIComponent(accountId)}`}><ExternalLink size={15} /> Plein écran</Link> : null}
+        {embedded ? <ContextualMapLink accountId={accountId} sourceView="map" className={styles.button}><ExternalLink size={15} /> Plein écran</ContextualMapLink> : null}
         <button type="button" className={styles.button} onClick={() => { setLoading(true); void loadMap(); }} disabled={loading}><RefreshCw size={15} /> Actualiser</button>
         <button type="button" className={styles.primaryButton} onClick={() => { setShowImport(true); setPreview(null); setError(null); }}><FileJson2 size={15} /> Importer un JSON</button>
       </div>
@@ -596,6 +625,7 @@ export function AccountMap({ accountId, embedded = false }: { accountId: string;
             {!visibleRelations.length ? <tr><td colSpan={5}>Aucune relation dans ce filtre.</td></tr> : null}
           </tbody></table>
         </div>}
+        {prospect?.legacyContact ? <details className={styles.available} open><summary>Contact historique à rattacher</summary><p>Cette personne est enregistrée dans les anciens champs de la fiche société. Elle reste visible ici jusqu’à son rattachement aux contacts CRM.</p><div><button type="button" disabled={busy} onClick={() => void attachLegacyContact()}><UserRound size={14} /> {prospect.legacyContact.name}<small>{prospect.legacyContact.title || "Poste à préciser"}</small><Plus size={13} /></button></div></details> : null}
         {unusedContacts.length ? <details className={styles.available}><summary>Contacts CRM à placer ({unusedContacts.length})</summary><p>Un contact ajouté ici reste lié à sa fiche et à ses activités existantes.</p><div>{unusedContacts.map((contact) => <button key={contact.id} type="button" disabled={busy} onClick={() => void addExistingContact(contact.id)}><UserRound size={14} /> {contact.name}<small>{contact.verifiedTitle || contact.inputTitle || "Poste à préciser"}</small><Plus size={13} /></button>)}</div></details> : null}
         <details className={styles.questions}><summary>Questions ouvertes ({openQuestions.length})</summary><label className={styles.actionDue}>Échéance facultative pour une action du suivi<input type="datetime-local" value={nextActionDate} onChange={(event) => setNextActionDate(event.target.value)} /></label><ul>{openQuestions.map((item) => <li key={item.id}><span>{item.question}{item.nextAction ? <small>Prochaine piste : {item.nextAction}</small> : null}</span><div><button type="button" onClick={() => void promoteQuestionAction(item)} disabled={busy || !prospect}>Définir comme prochaine action du suivi</button><button type="button" onClick={() => void answerQuestion(item.id, item.version)} disabled={busy}>Vérifiée</button></div></li>)}{!openQuestions.length ? <li>Aucune question pour l’instant.</li> : null}</ul><form onSubmit={(event) => void createQuestion(event)}><label>Nouvelle question<input value={newQuestion} onChange={(event) => setNewQuestion(event.target.value)} placeholder="Que reste-t-il à vérifier ?" maxLength={2000} /></label><label>Prochaine piste, facultative<input value={newQuestionAction} onChange={(event) => setNewQuestionAction(event.target.value)} placeholder="Ex. demander au RAF" maxLength={2000} /></label><button type="submit" disabled={busy || !newQuestion.trim()}><Plus size={14} /> Ajouter</button></form></details>
       </div>
@@ -704,11 +734,21 @@ type MarketAccountResult = { accounts: Array<{ prospect: TrackedProspect }>; tot
 
 /** Additional Suivi commercial view: choose an account, then work on its map. */
 export function AccountMapWorkspace() {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("crmMapQuery") ?? "");
   const [accounts, setAccounts] = useState<Array<{ id: string; name: string; secondary: string }>>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const parameters = new URLSearchParams(window.location.search);
+    return parameters.get("crmMapAccount") || (parameters.get("crmView") === "map" ? parameters.get("crmAccount") : null);
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    if (query) parameters.set("crmMapQuery", query); else parameters.delete("crmMapQuery");
+    if (selectedId) parameters.set("crmMapAccount", selectedId); else parameters.delete("crmMapAccount");
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}?${parameters}`);
+  }, [query, selectedId]);
   useEffect(() => {
     const controller = new AbortController();
     const timer = setTimeout(async () => {
@@ -718,14 +758,14 @@ export function AccountMapWorkspace() {
         const result = await apiJson<MarketAccountResult>(`/api/prospect-factory/crm/market/accounts?${params}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
         const next = result.accounts.map(({ prospect }) => ({ id: prospect.id, name: prospect.snapshot.commercialName || prospect.snapshot.companyName, secondary: [prospect.snapshot.city, prospect.snapshot.territory].filter(Boolean).join(" · ") }));
-        setAccounts(next); setSelectedId((current) => next.some((item) => item.id === current) ? current : next[0]?.id || null); setError(null);
+        setAccounts(next); setSelectedId((current) => current || next[0]?.id || null); setError(null);
       } catch (caught) { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Liste des comptes indisponible."); }
       finally { if (!controller.signal.aborted) setLoading(false); }
     }, query ? 250 : 0);
     return () => { clearTimeout(timer); controller.abort(); };
   }, [query]);
   return <section className={styles.workspaceRoot} aria-label="Vue Cartographie du suivi commercial">
-    <aside className={styles.accountRail}><div className={styles.accountRailHeader}><span className={styles.eyebrow}><Network size={14} /> Nouvelle vue</span><h2>Cartographie</h2><p>Choisissez un compte pour explorer son organisation et sa décision commerciale. Les 50 premiers résultats sont affichés ; la recherche porte sur tous les comptes.</p></div><label className={styles.accountSearch}><Search size={15} /><span className={styles.srOnly}>Rechercher un compte</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Rechercher un compte…" /></label>{error ? <p className={styles.railError}>{error}</p> : null}<div className={styles.accountList} aria-busy={loading}>{accounts.map((item) => <button key={item.id} type="button" aria-current={selectedId === item.id ? "page" : undefined} onClick={() => setSelectedId(item.id)}><Building2 size={15} /><span><strong>{item.name}</strong><small>{item.secondary || "Localisation à préciser"}</small></span><ArrowRight size={14} /></button>)}{!accounts.length && !loading ? <p>Aucun compte trouvé.</p> : null}</div></aside>
+    <aside className={styles.accountRail}><div className={styles.accountRailHeader}><span className={styles.eyebrow}><Network size={14} /> Comptes CRM</span><h2>Cartographie</h2><p>Choisissez un compte pour explorer son organisation et sa décision commerciale. Les 50 premiers résultats sont affichés ; la recherche porte sur tous les comptes.</p></div><label className={styles.accountSearch}><Search size={15} /><span className={styles.srOnly}>Rechercher un compte</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Rechercher un compte…" /></label>{error ? <p className={styles.railError}>{error}</p> : null}{selectedId && accounts.length > 0 && !accounts.some((item) => item.id === selectedId) ? <p className={styles.railError}>La carte ouverte reste affichée. Choisissez un résultat pour changer de compte.</p> : null}<div className={styles.accountList} aria-busy={loading}>{accounts.map((item) => <button key={item.id} type="button" aria-current={selectedId === item.id ? "page" : undefined} onClick={() => setSelectedId(item.id)}><Building2 size={15} /><span><strong>{item.name}</strong><small>{item.secondary || "Localisation à préciser"}</small></span><ArrowRight size={14} /></button>)}{!accounts.length && !loading ? <p>Aucun compte trouvé.</p> : null}</div></aside>
     <div className={styles.workspaceMap}>{selectedId ? <AccountMap key={selectedId} accountId={selectedId} embedded /> : <div className={styles.canvasEmpty}><CircleHelp size={25} /><strong>Choisissez un compte</strong><p>La carte est liée à un compte du CRM.</p></div>}</div>
   </section>;
 }

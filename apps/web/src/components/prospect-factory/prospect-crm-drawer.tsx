@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -51,6 +50,8 @@ import {
   type TrackedProspect
 } from "@/lib/prospect-factory-crm-contract";
 import styles from "./prospect-crm-drawer.module.css";
+import { ContextualMapLink } from "./contextual-map-link";
+import type { MapReturnView } from "./prospect-navigation";
 
 type DrawerTab = "tracking" | "research" | "record" | "activity";
 type EditableActivityType = Extract<ProspectActivityType, "note" | "call" | "email" | "meeting">;
@@ -72,6 +73,7 @@ export type ProspectCrmDrawerProps = {
   trackingId?: string | null;
   initialTab?: DrawerTab;
   initialContactId?: string | null;
+  mapReturnView?: MapReturnView;
   onClose: () => void;
   onChanged: () => void;
 };
@@ -366,7 +368,7 @@ function sourceDomain(value: string) {
   }
 }
 
-export function ProspectCrmDrawer({ prospect: row, trackingId, initialTab, initialContactId, onClose, onChanged }: ProspectCrmDrawerProps) {
+export function ProspectCrmDrawer({ prospect: row, trackingId, initialTab, initialContactId, mapReturnView = "market", onClose, onChanged }: ProspectCrmDrawerProps) {
   const effectiveTrackingId = trackingId ?? row.tracking?.id ?? null;
   const [tab, setTab] = useState<DrawerTab>(initialTab ?? (effectiveTrackingId ? "tracking" : "record"));
   const [prospect, setProspect] = useState<TrackedProspect | null>(null);
@@ -681,7 +683,7 @@ export function ProspectCrmDrawer({ prospect: row, trackingId, initialTab, initi
               <button id="prospect-tab-record" type="button" role="tab" aria-selected={tab === "record"} aria-controls="prospect-panel-record" tabIndex={tab === "record" ? 0 : -1} className={tab === "record" ? styles.activeTab : ""} onClick={() => setTab("record")}><Building2 size={17} aria-hidden="true" /> Fiche entreprise</button>
               <button id="prospect-tab-activity" type="button" role="tab" aria-selected={tab === "activity"} aria-controls="prospect-panel-activity" tabIndex={tab === "activity" ? 0 : -1} className={tab === "activity" ? styles.activeTab : ""} onClick={() => setTab("activity")}><Activity size={17} aria-hidden="true" /> Activité <span>{activities.length}</span></button>
             </nav>
-            {effectiveTrackingId ? <Link className={styles.mapLink} href={`/prospects/cartographie/${encodeURIComponent(effectiveTrackingId)}`}><Network size={16} aria-hidden="true" /> Ouvrir la cartographie <ExternalLink size={13} aria-hidden="true" /></Link> : null}
+            {effectiveTrackingId ? <ContextualMapLink accountId={effectiveTrackingId} sourceView={mapReturnView} drawerId={effectiveTrackingId} drawerTab={tab} className={styles.mapLink}><Network size={16} aria-hidden="true" /> Ouvrir la cartographie <ExternalLink size={13} aria-hidden="true" /></ContextualMapLink> : null}
           </aside>
 
           <div className={styles.main}>

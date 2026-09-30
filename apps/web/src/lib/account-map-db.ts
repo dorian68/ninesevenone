@@ -214,7 +214,7 @@ export function getAccountMap(accountId: string): AccountMapSnapshot | null {
 }
 
 export type CreateNodeInput =
-  | { kind: "person"; contactId: string }
+  | { kind: "person"; contactId: string; notes?: string }
   | { kind: "unit"; unitKind: Exclude<AccountMapNode["unitKind"], null | "account">; name: string; title?: string | null; notes?: string }
   | { kind: "role_slot"; name: string; title?: string | null; notes?: string; opportunityId?: string | null };
 
@@ -228,7 +228,7 @@ export function createAccountMapNode(accountId: string, input: CreateNodeInput):
         (id,prospect_id,kind,contact_id,name,title,notes,created_at,updated_at)
         VALUES (?,?,'person',?,?,?,?,?,?)`)
         .run(randomUUID(), accountId, input.contactId, String(contact.name),
-          s(contact.verified_title ?? contact.input_title), "", timestamp, timestamp);
+          s(contact.verified_title ?? contact.input_title), input.notes ?? "", timestamp, timestamp);
       const row = queryOne(db, "SELECT id FROM prospect_factory_map_nodes WHERE prospect_id=? AND contact_id=?", accountId, input.contactId)!;
       return readNode(db, accountId, String(row.id))!;
     }

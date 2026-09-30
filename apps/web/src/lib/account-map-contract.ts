@@ -88,7 +88,7 @@ const evidence = z.object({
 });
 
 export const createMapNodeSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("person"), contactId: id }).strict(),
+  z.object({ kind: z.literal("person"), contactId: id, notes: z.string().max(10_000).optional() }).strict(),
   z.object({ kind: z.literal("unit"), unitKind: z.enum(MAP_UNIT_KINDS).exclude(["account"]), name: text(240), title: optionalText(240), notes: z.string().max(10_000).optional() }).strict(),
   z.object({ kind: z.literal("role_slot"), name: text(240), title: optionalText(240), notes: z.string().max(10_000).optional(), opportunityId: id.nullable().optional() }).strict()
 ]);

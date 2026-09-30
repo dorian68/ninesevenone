@@ -323,29 +323,42 @@ export function AccountMap({ accountId, embedded = false, returnTo }: { accountI
     event.preventDefault(); if (!selection || selection.type !== "node") return;
     setBusy(true); setError(null);
     try {
+      const expectedNotes = nodeDraft.notes.trim();
+      let savedNode: MapNode;
       if (currentNode) {
         const payload = currentNode.kind === "person"
-          ? { expectedVersion: currentNode.version, notes: nodeDraft.notes.trim() }
+          ? { expectedVersion: currentNode.version, notes: expectedNotes }
           : currentNode.kind === "unit"
-            ? { expectedVersion: currentNode.version, name: nodeDraft.name.trim(), title: nodeDraft.title.trim() || null, unitKind: nodeDraft.unitKind, notes: nodeDraft.notes.trim() }
-            : { expectedVersion: currentNode.version, name: nodeDraft.name.trim(), notes: nodeDraft.notes.trim(), resolvedContactId: nodeDraft.resolvedContactId || null };
-        await apiJson(`${base(accountId)}/nodes/${encodeURIComponent(currentNode.id)}`, jsonInit("PATCH", payload));
+            ? { expectedVersion: currentNode.version, name: nodeDraft.name.trim(), title: nodeDraft.title.trim() || null, unitKind: nodeDraft.unitKind, notes: expectedNotes }
+            : { expectedVersion: currentNode.version, name: nodeDraft.name.trim(), notes: expectedNotes, resolvedContactId: nodeDraft.resolvedContactId || null };
+        const result = await apiJson<{ node: MapNode }>(`${base(accountId)}/nodes/${encodeURIComponent(currentNode.id)}`, jsonInit("PATCH", payload));
+        savedNode = result.node;
       } else if (nodeDraft.kind === "person") {
         let contactId = nodeDraft.contactId;
         if (!contactId) {
           if (!nodeDraft.name.trim()) throw new Error("Indiquez un nom ou choisissez un contact CRM.");
           const created = await apiJson<{ contact: { id: string } }>(`/api/prospect-factory/crm/prospects/${encodeURIComponent(accountId)}/contacts`, jsonInit("POST", { name: nodeDraft.name.trim(), verifiedTitle: nodeDraft.title.trim() || null, evidenceType: "to_confirm" }));
           contactId = created.contact.id;
+          setNodeDraft((draft) => ({ ...draft, contactId }));
+          setMap((current) => current ? { ...current, availableContacts: [...current.availableContacts.filter((contact) => contact.id !== contactId), { id: contactId, name: nodeDraft.name.trim(), inputTitle: null, verifiedTitle: nodeDraft.title.trim() || null }] } : current);
         }
-        await apiJson(`${base(accountId)}/nodes`, jsonInit("POST", { kind: "person", contactId }));
+        const result = await apiJson<{ node: MapNode }>(`${base(accountId)}/nodes`, jsonInit("POST", { kind: "person", contactId, notes: expectedNotes }));
+        savedNode = result.node;
       } else {
         if (!nodeDraft.name.trim()) throw new Error("Le libellé est nécessaire.");
         const payload = nodeDraft.kind === "unit"
-          ? { kind: "unit", name: nodeDraft.name.trim(), title: nodeDraft.title.trim() || null, unitKind: nodeDraft.unitKind, notes: nodeDraft.notes.trim() }
-          : { kind: "role_slot", name: nodeDraft.name.trim(), notes: nodeDraft.notes.trim(), opportunityId: view === "decision" ? opportunityId : null };
-        await apiJson(`${base(accountId)}/nodes`, jsonInit("POST", payload));
+          ? { kind: "unit" as const, name: nodeDraft.name.trim(), title: nodeDraft.title.trim() || null, unitKind: nodeDraft.unitKind, notes: expectedNotes }
+          : { kind: "role_slot" as const, name: nodeDraft.name.trim(), notes: expectedNotes, opportunityId: view === "decision" ? opportunityId : null };
+        const result = await apiJson<{ node: MapNode }>(`${base(accountId)}/nodes`, jsonInit("POST", payload));
+        savedNode = result.node;
       }
-      setSelection(null); setNotice("Nœud enregistré."); await loadMap();
+      if (savedNode.notes !== expectedNotes) throw new Error("Le serveur n’a pas confirmé l’enregistrement de la note. Le formulaire est conservé ; réessayez.");
+      setMap((current) => current ? { ...current, nodes: current.nodes.some((node) => node.id === savedNode.id)
+        ? current.nodes.map((node) => node.id === savedNode.id ? savedNode : node)
+        : [...current.nodes, savedNode] } : current);
+      setSelection(null);
+      setNotice(nodeDraft.kind === "person" ? "Note de la personne enregistrée et confirmée." : "Nœud enregistré et confirmé.");
+      void loadMap();
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Enregistrement impossible."); }
     finally { setBusy(false); }
   }

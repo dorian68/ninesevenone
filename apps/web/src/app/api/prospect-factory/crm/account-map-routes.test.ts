@@ -53,6 +53,22 @@ describe("Account map routes", () => {
     expect(result.map.relations).toEqual([]);
   });
 
+  it("saves and reloads notes supplied when adding a person node", async () => {
+    const prospect = account("Route Notes Personne");
+    const contact = createProspectContact(prospect.id, { name: "Camille Exemple" });
+    const path = `${base}/${prospect.id}/map`;
+    const notes = "A rencontré la personne au salon. Rappeler mardi.";
+    const created = await postResource(request(`${path}/nodes`, "POST", { kind: "person", contactId: contact.id, notes }), context(prospect.id, "nodes"));
+    expect(created.status).toBe(201);
+    const createdPayload = await created.json();
+    expect(createdPayload.node.notes).toBe(notes);
+
+    const reloaded = await getMap(request(path), context(prospect.id));
+    expect(reloaded.status).toBe(200);
+    const reloadedPayload = await reloaded.json();
+    expect(reloadedPayload.map.nodes.find((node: { id: string }) => node.id === createdPayload.node.id)?.notes).toBe(notes);
+  });
+
   it("edits sourced relations with optimistic version checks and account boundaries", async () => {
     const prospect = account("Route Relations");
     const other = account("Autre Route");

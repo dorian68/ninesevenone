@@ -199,7 +199,7 @@ $env:CARAAIOS_TUNNEL_ID = Read-Host 'tunnel_id OpenAI'
 $env:MCP_EXTRA_HEADERS = 'X-Caraaios-Mcp-Key: env:CARAAIOS_MCP_TOKEN'
 $env:MCP_DISCOVERY_EXTRA_HEADERS = 'X-Caraaios-Mcp-Key: env:CARAAIOS_MCP_TOKEN'
 
-tunnel-client init --sample sample_mcp_stdio_local --profile caraaios --tunnel-id $env:CARAAIOS_TUNNEL_ID --mcp-server-url http://127.0.0.1:3100/mcp
+tunnel-client init --sample sample_mcp_remote_no_auth --profile caraaios --tunnel-id $env:CARAAIOS_TUNNEL_ID --mcp-server-url http://127.0.0.1:3100/mcp
 tunnel-client doctor --profile caraaios --explain
 tunnel-client run --profile caraaios
 ```

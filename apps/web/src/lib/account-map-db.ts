@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { withAccountMapDatabase } from "./prospect-factory-crm-db";
 import type {
-  AccountMapClaim, AccountMapLayout, AccountMapNode, AccountMapOpportunity,
+  AccountMapClaim, AccountMapEvidenceLink, AccountMapLayout, AccountMapNode, AccountMapOpportunity,
   AccountMapQuestion, AccountMapRelation, AccountMapSnapshot, AccountMapSource,
   AccountMapStakeholderRole, MapEvidenceStatus, MapRelationKind, MapView
 } from "./account-map-contract";
@@ -180,7 +180,14 @@ export function getAccountMap(accountId: string): AccountMapSnapshot | null {
     const claimRows = queryAll(db, "SELECT * FROM prospect_factory_map_claims WHERE prospect_id=? ORDER BY created_at", accountId);
     const questionRows = queryAll(db, "SELECT * FROM prospect_factory_map_questions WHERE prospect_id=? ORDER BY created_at", accountId);
     const roleRows = queryAll(db, "SELECT * FROM prospect_factory_map_stakeholder_roles WHERE prospect_id=? ORDER BY created_at, rowid", accountId);
-    const evidenceRows = queryAll(db, "SELECT subject_kind,subject_id,source_id FROM prospect_factory_map_evidence_sources WHERE prospect_id=?", accountId);
+    const evidenceRows = queryAll(db, "SELECT id,subject_kind,subject_id,source_id,locator,excerpt,evidence_type FROM prospect_factory_map_evidence_sources WHERE prospect_id=? ORDER BY rowid", accountId);
+    const evidenceLinks: AccountMapEvidenceLink[] = evidenceRows.map((row) => ({
+      id: String(row.id), accountId,
+      subjectKind: String(row.subject_kind) as AccountMapEvidenceLink["subjectKind"],
+      subjectId: String(row.subject_id), sourceId: String(row.source_id),
+      locator: s(row.locator), excerpt: s(row.excerpt),
+      evidenceType: s(row.evidence_type) as AccountMapEvidenceLink["evidenceType"]
+    }));
     const evidenceBySubject = new Map<string, string[]>();
     for (const row of evidenceRows) {
       const key = `${String(row.subject_kind)}:${String(row.subject_id)}`;
@@ -204,7 +211,7 @@ export function getAccountMap(accountId: string): AccountMapSnapshot | null {
     const contacts = queryAll(db, "SELECT id,name,input_title,verified_title FROM prospect_factory_contacts WHERE prospect_id=? ORDER BY name COLLATE NOCASE", accountId);
     return { accountId, accountName: String(account.company_name), nodes,
       relations: relationRows.map((row) => { const relation = mapRelation(row); return { ...relation, sourceIds: allSources("relation", relation.id, relation.sourceIds) }; }),
-      opportunities, sources: sourceRows.map(mapSource),
+      opportunities, sources: sourceRows.map(mapSource), evidenceLinks,
       claims: claimRows.map((row) => { const claim = mapClaim(row); return { ...claim, sourceIds: allSources("claim", claim.id, claim.sourceIds) }; }),
       questions: questionRows.map(mapQuestion),
       stakeholderRoles: roleRows.map((row) => { const role = mapRole(row); return { ...role, sourceIds: allSources("stakeholder_role", role.id, role.sourceIds) }; }), layouts: [...layouts.values()],
@@ -438,11 +445,24 @@ function checkedEvidence(db: DB, accountId: string, input: EvidenceInput, actorI
 }
 function syncEvidenceSources(db: DB, accountId: string, subjectKind: "relation" | "claim" | "stakeholder_role", subjectId: string,
   sourceIds: string[], locator?: string | null, excerpt?: string | null) {
-  db.prepare("DELETE FROM prospect_factory_map_evidence_sources WHERE prospect_id=? AND subject_kind=? AND subject_id=?")
-    .run(accountId, subjectKind, subjectId);
+  const current = queryAll(db, "SELECT source_id FROM prospect_factory_map_evidence_sources WHERE prospect_id=? AND subject_kind=? AND subject_id=?",
+    accountId, subjectKind, subjectId);
+  const desired = new Set(sourceIds);
+  const retained = new Set<string>();
+  for (const row of current) {
+    const sourceId = String(row.source_id);
+    if (desired.has(sourceId)) {
+      retained.add(sourceId);
+    } else {
+      db.prepare("DELETE FROM prospect_factory_map_evidence_sources WHERE prospect_id=? AND subject_kind=? AND subject_id=? AND source_id=?")
+        .run(accountId, subjectKind, subjectId, sourceId);
+    }
+  }
   const insert = db.prepare(`INSERT INTO prospect_factory_map_evidence_sources
     (id,prospect_id,subject_kind,subject_id,source_id,locator,excerpt) VALUES (?,?,?,?,?,?,?)`);
-  for (const sourceId of sourceIds) insert.run(randomUUID(), accountId, subjectKind, subjectId, sourceId, nullable(locator), nullable(excerpt));
+  for (const sourceId of sourceIds) {
+    if (!retained.has(sourceId)) insert.run(randomUUID(), accountId, subjectKind, subjectId, sourceId, nullable(locator), nullable(excerpt));
+  }
 }
 function assertRelationEndpoints(from: Row, to: Row, kind: MapRelationKind) {
   const valid = kind === "unqualified" ? true

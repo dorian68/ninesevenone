@@ -444,6 +444,7 @@ export type AddProspectActivityInput = {
 export type ProspectActivityWriteResult = {
   activity: ProspectActivity;
   prospect: TrackedProspect;
+  idempotent: boolean;
 };
 
 export type ProspectUpdateAuditResult = {

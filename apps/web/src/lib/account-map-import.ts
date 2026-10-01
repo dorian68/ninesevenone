@@ -361,9 +361,27 @@ function fillEmptyContactFields(db: DatabaseSync, batchId: string, accountId: st
   if (!before) throw new AccountMapImportError("Contact CRM absent de ce compte.", "INVALID_CONTACT_REFERENCE");
   const candidates: Record<string, string | null | undefined> = {
     first_name: person.first_name, last_name: person.last_name, email: person.email,
-    phone: person.phone, linkedin: person.linkedin_url, input_title: person.job_title_observed
+    phone: person.phone, linkedin: person.linkedin_url
   };
   const patch = Object.entries(candidates).filter(([key, value]) => value && !before[key]);
+  if (person.job_title_observed && person.job_title_observed !== before.input_title) {
+    // A new observation may refresh the raw title of a contact created by a map
+    // import. An unrelated title maintained manually in the CRM is preserved.
+    const importedContact = String(before.fingerprint ?? "").startsWith("map-import:");
+    if (!before.input_title || importedContact) {
+      const latestTitle = db.prepare(`SELECT c.information_date FROM prospect_factory_map_claims c
+        JOIN prospect_factory_map_nodes n ON n.id=c.subject_node_id
+        WHERE n.prospect_id=? AND n.contact_id=? AND c.field='other'
+          AND c.value_json LIKE '"title_observed:%'
+        ORDER BY c.created_at DESC LIMIT 1`).get(accountId, contactId) as { information_date: string | null } | undefined;
+      const incomingDate = person.identity_evidence.information_date ?? null;
+      const incomingTime = incomingDate ? Date.parse(incomingDate) : null;
+      const latestTime = latestTitle?.information_date ? Date.parse(latestTitle.information_date) : null;
+      if (incomingTime === null || latestTime === null || incomingTime >= latestTime) {
+        patch.push(["input_title", person.job_title_observed]);
+      }
+    }
+  }
   if (!patch.length) return false;
   const timestamp = new Date().toISOString();
   db.prepare(`UPDATE prospect_factory_contacts SET ${patch.map(([key]) => `${key}=?`).join(",")}, updated_at=? WHERE id=? AND prospect_id=?`)
@@ -374,6 +392,26 @@ function fillEmptyContactFields(db: DatabaseSync, batchId: string, accountId: st
     (id,batch_id,entity_table,entity_id,operation,before_json,after_json,applied_version,undone_at)
     VALUES (?,?,?,?,?,?,?,?,NULL)`).run(randomUUID(), batchId, "prospect_factory_contacts", contactId, "update",
       JSON.stringify(before), JSON.stringify(after), null);
+  return true;
+}
+
+function appendPersonNodeNotes(db: DatabaseSync, batchId: string, accountId: string,
+  nodeId: string, incoming: string | undefined): boolean {
+  if (!incoming?.trim()) return false;
+  const before = db.prepare("SELECT * FROM prospect_factory_map_nodes WHERE id=? AND prospect_id=?")
+    .get(nodeId, accountId) as Row | undefined;
+  if (!before) throw new AccountMapImportError("Nœud de personne absent du compte.", "INVALID_PERSON_NODE");
+  const current = String(before.notes ?? "");
+  if (current.includes(incoming)) return false;
+  const next = current ? current + "\n\n" + incoming : incoming;
+  db.prepare("UPDATE prospect_factory_map_nodes SET notes=?,version=version+1,updated_at=? WHERE id=? AND prospect_id=?")
+    .run(next, new Date().toISOString(), nodeId, accountId);
+  const after = db.prepare("SELECT * FROM prospect_factory_map_nodes WHERE id=?").get(nodeId) as Row | undefined;
+  if (!after) throw new Error("Nœud absent après ajout de notes.");
+  db.prepare("INSERT INTO prospect_factory_map_import_changes " +
+    "(id,batch_id,entity_table,entity_id,operation,before_json,after_json,applied_version,undone_at) " +
+    "VALUES (?,?,?,?,?,?,?,?,NULL)").run(randomUUID(), batchId, "prospect_factory_map_nodes", nodeId, "update",
+      JSON.stringify(before), JSON.stringify(after), String(after.version));
   return true;
 }
 
@@ -397,7 +435,8 @@ function addEvidenceSources(db: DatabaseSync, batchId: string, accountId: string
     if (existing) continue;
     insertLogged(db, batchId, "prospect_factory_map_evidence_sources", {
       id: randomUUID(), prospect_id: accountId, subject_kind: subjectKind, subject_id: subjectId,
-      source_id: dbSourceId, locator: evidence.locator ?? null, excerpt: evidence.excerpt ?? null
+      source_id: dbSourceId, locator: evidence.locator ?? null, excerpt: evidence.excerpt ?? null,
+      evidence_type: evidence.evidence_type ?? null
     });
   }
 }
@@ -461,10 +500,15 @@ function addRelation(db: DatabaseSync, batchId: string, document: AccountMapImpo
       .get(document.account_id, toId, document.account_id, fromId);
     if (cycle) throw new AccountMapImportError("Ce rattachement créerait un cycle entre unités.", "UNIT_RELATION_CYCLE", 409);
   }
-  const existing = db.prepare(`SELECT id FROM prospect_factory_map_relations WHERE prospect_id=? AND from_node_id=?
+  const existing = db.prepare(`SELECT id,evidence_status FROM prospect_factory_map_relations WHERE prospect_id=? AND from_node_id=?
     AND to_node_id=? AND kind=? AND opportunity_id IS ? ORDER BY created_at LIMIT 1`)
-    .get(document.account_id, fromId, toId, kind, opportunityId) as { id: string } | undefined;
+    .get(document.account_id, fromId, toId, kind, opportunityId) as { id: string; evidence_status: string } | undefined;
   if (existing && !["contradictory", "obsolete"].includes(evidence.status)) {
+    if (existing.evidence_status !== effectiveStatus(evidence)) {
+      throw new AccountMapImportError(
+        "Une nouvelle preuve ne peut pas être rattachée automatiquement à une relation d'un autre statut.",
+        "RELATION_EVIDENCE_CONFLICT", 409);
+    }
     addEvidenceSources(db, batchId, document.account_id, "relation", existing.id, evidence, sourceMap);
     return existing.id;
   }
@@ -625,7 +669,7 @@ function applyInsideTransaction(db: DatabaseSync, routeAccountId: string, input:
     const dbId = insertLogged(db, document.import_batch_id, "prospect_factory_map_sources", {
       id: randomUUID(), prospect_id: document.account_id,
       kind: source.kind === "user_screenshot" ? "screenshot" : source.kind === "crm_activity" ? "crm_note" : source.kind,
-      label: source.label, reference: source.asset_ref ?? source.url ?? null,
+      label: source.label, reference: source.reference ?? source.asset_ref ?? source.url ?? null,
       collected_at: source.collected_at, information_date: source.information_date ?? null,
       locator: null, excerpt: null, retention_until: source.retention_until ?? null,
       version: 1, created_at: timestamp, updated_at: timestamp
@@ -680,10 +724,11 @@ function applyInsideTransaction(db: DatabaseSync, routeAccountId: string, input:
     const existingNode = db.prepare("SELECT id FROM prospect_factory_map_nodes WHERE prospect_id=? AND kind='person' AND contact_id=?")
       .get(document.account_id, contactId) as { id: string } | undefined;
     const nodeId = existingNode?.id ?? makeNode(db, document.import_batch_id, document.account_id,
-      "person", person.display_name_observed, { contactId, title: person.job_title_observed });
+      "person", person.display_name_observed, { contactId, title: person.job_title_observed, notes: person.notes });
     if (!existingNode) created += 1;
     tempNodes.set(person.temp_id, nodeId);
     if (existingContact && fillEmptyContactFields(db, document.import_batch_id, document.account_id, contactId, person)) updated += 1;
+    if (existingNode && appendPersonNodeNotes(db, document.import_batch_id, document.account_id, nodeId, person.notes)) updated += 1;
     addClaim(db, document.import_batch_id, document, nodeId, null, "person_identity", {
       display_name_observed: person.display_name_observed, first_name: person.first_name ?? null,
       last_name: person.last_name ?? null, job_title_observed: person.job_title_observed ?? null,
@@ -724,7 +769,7 @@ function applyInsideTransaction(db: DatabaseSync, routeAccountId: string, input:
     const fromId = resolveNode(db, document, relation.from_ref, tempNodes, rootId);
     const toId = resolveNode(db, document, relation.to_ref, tempNodes, rootId);
     addRelation(db, document.import_batch_id, document, fromId, toId, relation.kind,
-      relation.opportunity_id ?? null, relation.evidence, sourceMap);
+      relation.opportunity_id ?? null, relation.evidence, sourceMap, relation.notes ?? "");
     created += 1;
   }
   for (const [index, role] of document.opportunity_roles.entries()) {
@@ -771,7 +816,7 @@ function applyInsideTransaction(db: DatabaseSync, routeAccountId: string, input:
     const nodeId = resolveNode(db, document, hypothesis.subject_ref, tempNodes, rootId);
     addClaim(db, document.import_batch_id, document, nodeId, null, "hypothesis", hypothesis.proposition,
       { status: "hypothesis", source_ids: hypothesis.source_ids, justification: hypothesis.justification,
-        verification_question: hypothesis.verification_question }, sourceMap);
+        verification_question: hypothesis.verification_question, evidence_type: hypothesis.evidence_type }, sourceMap);
     created += 1;
   }
   for (const [index, question] of document.open_questions.entries()) {
@@ -857,7 +902,8 @@ export function undoAccountMapImport(accountId: string, batchId: string, actor: 
       const conflicts: string[] = [];
       for (const change of changes) {
         if (!INSERTABLE_TABLES.has(change.entity_table) || !["insert", "update"].includes(change.operation) || !change.after_json
-          || (change.operation === "update" && (change.entity_table !== "prospect_factory_contacts" || !change.before_json))) {
+          || (change.operation === "update"
+            && (!["prospect_factory_contacts", "prospect_factory_map_nodes"].includes(change.entity_table) || !change.before_json))) {
           conflicts.push(`Modification ${change.id} impossible à annuler automatiquement.`);
           continue;
         }
@@ -875,8 +921,9 @@ export function undoAccountMapImport(accountId: string, batchId: string, actor: 
           if (change.operation === "update") {
             const before = JSON.parse(change.before_json!) as Row;
             const columns = Object.keys(before).filter((column) => column !== "id");
-            db.prepare(`UPDATE prospect_factory_contacts SET ${columns.map((column) => `${column}=?`).join(",")}
-              WHERE id=?`).run(...columns.map((column) => before[column]), change.entity_id);
+            db.prepare("UPDATE " + change.entity_table + " SET "
+              + columns.map((column) => column + "=?").join(",") + " WHERE id=?")
+              .run(...columns.map((column) => before[column]), change.entity_id);
             continue;
           }
           const dependent = checkExternalDependents(db, change.entity_table, change.entity_id);

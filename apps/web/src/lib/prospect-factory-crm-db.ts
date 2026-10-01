@@ -1204,6 +1204,85 @@ function getDatabase() {
       throw error;
     }
   }
+  // MCP and the CRM UI share the same accounts and ICP catalogue. This additive
+  // association permits several contextual ICP assessments per account while
+  // preserving the historical segment_id and its existing UI behaviour.
+  if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 8) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 8) {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS prospect_factory_account_icps (
+            prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+            icp_id TEXT NOT NULL REFERENCES prospect_factory_icps(id) ON DELETE CASCADE,
+            status TEXT NOT NULL CHECK(status IN ('candidate','investigating','qualified','disqualified','unknown')),
+            evidence_type TEXT NOT NULL CHECK(evidence_type IN ('observed','verified','declared','inferred','unknown')),
+            source_type TEXT NOT NULL CHECK(source_type IN ('linkedin_video','linkedin_profile','company_website','press','job_posting','user_manual','chatgpt_research','codex_research','crm_ui','other','unknown')),
+            source_reference TEXT,
+            observed_at TEXT,
+            notes TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(prospect_id, icp_id)
+          );
+          CREATE INDEX IF NOT EXISTS prospect_factory_account_icps_icp_idx
+            ON prospect_factory_account_icps(icp_id, status, updated_at DESC);
+          CREATE TABLE IF NOT EXISTS prospect_factory_account_icp_observations (
+            id TEXT PRIMARY KEY,
+            prospect_id TEXT NOT NULL,
+            icp_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            evidence_type TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_reference TEXT,
+            observed_at TEXT,
+            notes TEXT NOT NULL DEFAULT '',
+            recorded_at TEXT NOT NULL,
+            FOREIGN KEY(prospect_id, icp_id) REFERENCES prospect_factory_account_icps(prospect_id, icp_id) ON DELETE CASCADE
+          );
+          CREATE INDEX IF NOT EXISTS prospect_factory_account_icp_observations_account_idx
+            ON prospect_factory_account_icp_observations(prospect_id, icp_id, recorded_at DESC);
+          CREATE TABLE IF NOT EXISTS prospect_factory_mcp_audit (
+            id TEXT PRIMARY KEY,
+            actor TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            entity_id TEXT,
+            outcome TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS prospect_factory_mcp_audit_created_idx
+            ON prospect_factory_mcp_audit(created_at DESC);
+          PRAGMA user_version = 8;
+        `);
+        const foreignKeyViolation = db.prepare("PRAGMA foreign_key_check").get();
+        if (foreignKeyViolation) throw new Error("La migration ICP a révélé une référence invalide.");
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  // Preserve the exact MCP evidence qualification on existing source links.
+  // NULL means the legacy UI did not record a more specific type.
+  if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 9) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 9) {
+        addColumnIfMissing(db, "prospect_factory_map_evidence_sources", "evidence_type",
+          "TEXT CHECK(evidence_type IS NULL OR evidence_type IN ('observed','verified','declared','inferred','unknown'))");
+        db.exec("PRAGMA user_version = 9");
+        const foreignKeyViolation = db.prepare("PRAGMA foreign_key_check").get();
+        if (foreignKeyViolation) throw new Error("La migration des preuves a révélé une référence invalide.");
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   return db;
 }
 
@@ -2315,7 +2394,7 @@ export function addProspectActivity(prospectId: string, input: AddProspectActivi
     if (appended.idempotent) {
       db.exec("COMMIT");
       const prospect = getProspect(prospectId);
-      return prospect ? { activity: appended.activity, prospect } : null;
+      return prospect ? { activity: appended.activity, prospect, idempotent: true } : null;
     }
 
     db.prepare(`
@@ -2352,7 +2431,7 @@ export function addProspectActivity(prospectId: string, input: AddProspectActivi
     );
     db.exec("COMMIT");
     const prospect = getProspect(prospectId);
-    return prospect ? { activity: appended.activity, prospect } satisfies ProspectActivityWriteResult : null;
+    return prospect ? { activity: appended.activity, prospect, idempotent: false } satisfies ProspectActivityWriteResult : null;
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;

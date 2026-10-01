@@ -17,6 +17,7 @@ export const accountMapEvidenceStatusSchema = z.enum([
 
 export const accountMapImportEvidenceSchema = z.object({
   status: accountMapEvidenceStatusSchema,
+  evidence_type: z.enum(["observed", "verified", "declared", "inferred", "unknown"]).optional(),
   source_ids: z.array(sourceId).max(20),
   locator: optionalText(2_000),
   excerpt: optionalText(5_000),
@@ -39,6 +40,7 @@ const source = z.object({
   source_id: sourceId,
   kind: z.enum(["user_screenshot", "document", "meeting_note", "crm_activity", "web_page", "other"]),
   label: text(500),
+  reference: optionalText(2_048),
   collected_at: dateTime,
   information_date: date.or(dateTime).nullable().optional(),
   asset_ref: z.string().regex(/^private:[A-Za-z0-9._:/-]+$/).max(2_048).nullable().optional(),
@@ -80,6 +82,7 @@ const person = z.object({
   }, "URL LinkedIn valide requise.").nullable().optional(),
   email: z.string().email().max(500).nullable().optional(),
   phone: optionalText(500),
+  notes: z.string().max(10_000).optional(),
   identity_evidence: accountMapImportEvidenceSchema,
   affiliations: z.array(affiliation).max(30).default([])
 }).strict();
@@ -97,6 +100,7 @@ const relation = z.object({
   to_ref: graphRef,
   kind: z.enum(["unqualified", "works_in", "reports_to", "functional_reports_to", "part_of", "can_introduce", "advises"]),
   opportunity_id: id.nullable().optional(),
+  notes: z.string().max(10_000).optional(),
   evidence: accountMapImportEvidenceSchema
 }).strict().refine((value) => value.from_ref !== value.to_ref, "Une relation ne peut pas relier un nœud à lui-même.");
 
@@ -142,6 +146,7 @@ const hypothesis = z.object({
   proposition: text(5_000),
   justification: text(5_000),
   source_ids: z.array(sourceId).max(20).default([]),
+  evidence_type: z.literal("inferred").optional(),
   verification_question: text(2_000)
 }).strict();
 

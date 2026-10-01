@@ -60,6 +60,11 @@ export type AccountMapStakeholderRole = {
   validatedBy: string | null; validatedAt: string | null; version: number;
   createdAt: string; updatedAt: string;
 };
+export type AccountMapEvidenceLink = {
+  id: string; accountId: string; subjectKind: "relation" | "claim" | "stakeholder_role";
+  subjectId: string; sourceId: string; locator: string | null; excerpt: string | null;
+  evidenceType: "observed" | "verified" | "declared" | "inferred" | "unknown" | null;
+};
 export type AccountMapLayout = {
   view: MapView; opportunityId: string | null;
   positions: Array<{ nodeId: string; x: number; y: number }>;
@@ -71,6 +76,7 @@ export type AccountMapSnapshot = {
   opportunities: AccountMapOpportunity[]; sources: AccountMapSource[];
   claims: AccountMapClaim[]; questions: AccountMapQuestion[];
   stakeholderRoles: AccountMapStakeholderRole[]; layouts: AccountMapLayout[];
+  evidenceLinks: AccountMapEvidenceLink[];
   availableContacts: Array<{ id: string; name: string; inputTitle: string | null; verifiedTitle: string | null }>;
 };
 

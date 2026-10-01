@@ -68,7 +68,7 @@ describe("Prospect Factory market hierarchy", () => {
     expect(crm.getProspect(account.id)?.market.segmentId).toBeNull();
     crm.closeProspectCrmDatabase();
     const upgraded = new DatabaseSync(databasePath);
-    expect((upgraded.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
+    expect((upgraded.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(9);
     expect(["prospect_factory_prospects", "prospect_factory_contacts", "prospect_factory_activities"]
       .map((table) => Number((upgraded.prepare(`SELECT COUNT(*) AS total FROM ${table}`).get() as { total: number }).total))).toEqual(before);
     upgraded.close();

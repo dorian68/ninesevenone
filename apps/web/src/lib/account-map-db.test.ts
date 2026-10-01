@@ -316,8 +316,8 @@ describe("Account map persistence", () => {
         VALUES (?,?,?,?,'create',?,?)`)
         .run(changeId, batchId, "prospect_factory_map_relations", relation.id, JSON.stringify(relation), String(relation.version));
 
-      // Recreate the historical v6 CHECK constraint and force only the v7
-      // migration on reopen. This uses the disposable database of this test.
+      // Recreate the historical v6 CHECK constraint and run subsequent
+      // migrations on reopen. This uses the disposable database of this test.
       const tableSql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='prospect_factory_map_relations'`)
         .get() as { sql: string }).sql;
       const triggerNames = ["prospect_factory_map_relations_scope_insert", "prospect_factory_map_relations_scope_update",
@@ -352,8 +352,10 @@ describe("Account map persistence", () => {
       version: relation.version
     });
     crm.withAccountMapDatabase((db) => {
-      expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
+      expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(9);
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(db.prepare("SELECT evidence_type FROM prospect_factory_map_evidence_sources WHERE subject_kind='relation' AND subject_id=?")
+        .get(relation.id)).toEqual({ evidence_type: null });
       expect((db.prepare(`SELECT id FROM prospect_factory_map_evidence_sources WHERE subject_kind='relation' AND subject_id=?`)
         .get(relation.id) as { id: string }).id).toBeTruthy();
       expect((db.prepare("SELECT entity_id FROM prospect_factory_map_import_changes WHERE id=?")

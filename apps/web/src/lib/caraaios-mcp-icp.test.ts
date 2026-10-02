@@ -87,7 +87,7 @@ describe("Caraaios company ICP associations", () => {
     addCompany();
     crm.closeProspectCrmDatabase();
     const db = new DatabaseSync(databasePath);
-    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(9);
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(11);
     expect((db.prepare("SELECT COUNT(*) AS total FROM prospect_factory_mcp_audit").get() as { total: number }).total).toBe(0);
     expect(db.prepare("PRAGMA foreign_key_check").get()).toBeUndefined();
     db.close();

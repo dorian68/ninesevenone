@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { getAccountMap } from "@/lib/account-map-db";
 import { getCompanyIcps } from "@/lib/caraaios-mcp-icp";
 import { getCaraaiosCompanyNotes } from "@/lib/caraaios-mcp-research";
+import { listCompanySignals } from "@/lib/company-signals";
 import {
   addProspect, getProspect, listProspects, listProspectContacts,
   updateProspectWithAudit, withAccountMapDatabase
@@ -208,7 +209,7 @@ export function getCaraaiosContact(contactId: string, companyId?: string) {
 
 export function getCaraaiosCompanyMap(companyId: string, options: {
   include_people?: boolean; include_relationships?: boolean; include_evidence?: boolean;
-  include_research?: boolean; include_buying_committee?: boolean;
+  include_research?: boolean; include_buying_committee?: boolean; include_signals?: boolean;
 } = {}) {
   const company = getCaraaiosCompany(companyId);
   if (!company) return null;
@@ -256,6 +257,7 @@ export function getCaraaiosCompanyMap(companyId: string, options: {
     sources: options.include_evidence === false ? undefined : map.sources,
     evidence: options.include_evidence === false ? undefined : map.evidenceLinks,
     opportunities: map.opportunities,
-    icps: getCompanyIcps(companyId)?.associations ?? []
+    icps: getCompanyIcps(companyId)?.associations ?? [],
+    signals: options.include_signals === false ? undefined : listCompanySignals(companyId, { limit: 50 })
   };
 }

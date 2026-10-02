@@ -458,7 +458,7 @@ export function ProspectFactory() {
   const [trackingOffset, setTrackingOffset] = useState(0);
   const [trackingPageSize, setTrackingPageSize] = useState(25);
   const [selectedProspect, setSelectedProspect] = useState<ProspectFactoryRow | null>(null);
-  const [selectedProspectTab, setSelectedProspectTab] = useState<"tracking" | "research" | "record" | "activity" | undefined>(undefined);
+  const [selectedProspectTab, setSelectedProspectTab] = useState<"tracking" | "research" | "copywriting" | "record" | "activity" | undefined>(undefined);
   const [selectedActivityContactId, setSelectedActivityContactId] = useState<string | null>(null);
   const [manualProspectOpen, setManualProspectOpen] = useState(false);
   const [dismissBusyId, setDismissBusyId] = useState<string | null>(null);
@@ -576,7 +576,7 @@ export function ProspectFactory() {
       const restoredOffset = Number(parameters.get("crmOffset"));
       if (Number.isSafeInteger(restoredOffset) && restoredOffset >= 0 && restoredOffset <= 10_000_000) setTrackingOffset(restoredOffset);
       const restoredDrawerTab = parameters.get("crmDrawerTab");
-      if (restoredDrawerTab === "tracking" || restoredDrawerTab === "research" || restoredDrawerTab === "record" || restoredDrawerTab === "activity") setSelectedProspectTab(restoredDrawerTab);
+      if (restoredDrawerTab === "tracking" || restoredDrawerTab === "research" || restoredDrawerTab === "copywriting" || restoredDrawerTab === "record" || restoredDrawerTab === "activity") setSelectedProspectTab(restoredDrawerTab);
       setDrawerToRestore(parameters.get("crmDrawer"));
       setNavigationReady(true);
       fetch("/api/admin/session", { cache: "no-store" }).then(async (response) => {

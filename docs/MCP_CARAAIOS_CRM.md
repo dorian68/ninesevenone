@@ -40,7 +40,7 @@ npm run mcp:migrate
 npm run mcp:dev
 ```
 
-`mcp:migrate` crée une sauvegarde SQLite dans le sous-dossier `backups`, initialise le nouveau schéma par le même code CRM, puis contrôle la version et l'intégrité de la base. Le schéma CRM actuel est **v9** (`PRAGMA user_version = 9`) : cette migration ajoute `evidence_type` aux liens entre objets de la carte et sources. Il exige un fichier SQLite **déjà existant** ; ne l'exécutez pas pour une base neuve. Il doit être lancé avant `mcp:dev` si vous ciblez les données commerciales existantes du répertoire `GUAD`.
+`mcp:migrate` crée une sauvegarde SQLite dans le sous-dossier `backups`, initialise le nouveau schéma par le même code CRM, puis contrôle la version et l'intégrité de la base. Le schéma CRM actuel est **v11** (`PRAGMA user_version = 11`) : il ajoute aux signaux les brouillons de copywriting par personne et leur historique. Il exige un fichier SQLite **déjà existant** ; ne l'exécutez pas pour une base neuve. Il doit être lancé avant `mcp:dev` si vous ciblez les données commerciales existantes du répertoire `GUAD`.
 
 Le schéma CRM est initialisé par les services SQLite du projet à l'ouverture de la base. Les commandes de vérification sont :
 
@@ -82,12 +82,51 @@ Le serveur écoute sur l'interface locale par défaut. Si l'URL devient publique
 | `crm_upsert_opportunity` | Créer ou retrouver le contexte d'une campagne, d'un ICP ou d'un cas d'usage pour le buying committee. |
 | `crm_upsert_company_icp` | Ajouter ou actualiser une qualification ICP contextualisée. |
 | `crm_add_company_research` | Enregistrer une note, une preuve, un pain ou une hypothèse avec provenance. |
+| `crm_get_company_signals` | Lire les signaux de fit/timing et les métadonnées des pièces jointes, par pages. |
+| `crm_upsert_company_signal` | Créer, modifier ou archiver un signal avec contrôle de version. |
+| `crm_add_company_signal_attachment` | Joindre le PDF ou l'image d'origine à un signal. |
+| `crm_get_company_signal_attachment` | Relire une pièce jointe précise en Base64, seulement si nécessaire. |
+| `crm_get_outreach_context` | Lire un contexte de rédaction compact pour une personne : ICP, persona, carte, rôles d'achat, signaux, observations et brouillons. |
+| `crm_list_outreach_drafts` | Relire les brouillons d'une société ou d'un contact, avec pagination et archives facultatives. |
+| `crm_upsert_outreach_draft` | Créer ou modifier un brouillon ciblant un seul contact, avec contrôle de version et références aux signaux. |
 
 Les outils de lecture portent l'annotation MCP `readOnlyHint`. Les outils d'écriture sont identifiés comme tels et leurs entrées sont validées par schéma. Les annotations aident le client à traiter l'action, mais [ne remplacent pas le contrôle d'accès côté serveur](https://developers.openai.com/plugins/build/mcp-server).
 
 `crm_get_company_map` synchronise au besoin les contacts déjà présents en nœuds de la carte, comme le fait l'interface CRM. Son annotation signale donc correctement cet effet de persistance, même si la réponse est une lecture. `crm_get_company_icps` fournit aussi le catalogue des ICP existants et leurs identifiants. Pour associer un rôle d'achat à un ICP ou cas d'usage, créer ou retrouver d'abord son contexte avec `crm_upsert_opportunity`, puis passer `opportunity_id` dans `buying_committee`.
 
 Appeler `crm_get_company_map` avec `{"company_id":"<UUID>","include_evidence":true}` pour relire les liens de preuves de la cartographie. La réponse `map.evidence` associe chaque relation, affirmation ou rôle d'achat à une source par `subjectKind`, `subjectId` et `sourceId`, avec `locator`, `excerpt` et **`evidenceType` exact** : `observed`, `verified`, `declared`, `inferred` ou `unknown`. `map.sources` donne les sources correspondantes. Le statut métier `evidenceStatus` de la relation ou du rôle reste distinct de ce type de preuve ; un champion potentiel inféré reste donc inféré après relecture. Un lien ancien créé dans l'interface sans qualification explicite peut avoir `evidenceType: null` ; la migration ne lui attribue pas artificiellement un fait vérifié. `include_evidence:false` retire `sources` et `evidence` de la réponse.
+
+`crm_get_company_map` inclut aussi les **50 signaux les plus récents** dans `map.signals` (texte, liens et métadonnées de fichiers, jamais les octets). Passer `include_signals:false` pour une carte plus légère. `crm_get_company_signals` permet de parcourir tous les signaux avec `limit` (1–100), `offset` et `include_archived`.
+
+### Copywriting ciblé par personne
+
+L'onglet **Copywriting** du suivi commercial permet de sélectionner une personne déjà présente dans la société et de créer **uniquement les brouillons utiles**. Il n'existe aucun brouillon généré automatiquement pour tous les employés. Depuis la fiche d'un contact dans la vue marché, le bouton **Rédiger une approche** ouvre cet onglet avec cette personne sélectionnée. L'interface affiche ses brouillons, le contexte ICP/persona, les signaux disponibles et un formulaire de rédaction. La rédaction, la réflexion stratégique et la validation des affirmations restent dans Codex ou ChatGPT ; le CRM stocke le résultat. Aucun outil MCP n'envoie de message.
+
+Depuis MCP, rechercher d'abord la société et la personne avec `crm_search_companies` et `crm_search_contacts`, puis appeler `crm_get_outreach_context` avec `company_id` et `contact_id`. Ajouter `icp_id`, `persona_id` ou `opportunity_id` si ce contexte est connu. La réponse distingue l'état de qualification de l'ICP, les rôles d'achat et les éléments sourcés des hypothèses ; une piste inférée ne doit pas devenir une promesse ou un pain affirmé dans le texte. `crm_get_outreach_context` peut synchroniser un nœud de cartographie manquant, comme `crm_get_company_map`.
+
+Pour enregistrer, `crm_upsert_outreach_draft` reçoit `company_id`, une `idempotency_key` stable à la création, et `draft` : `contact_id` obligatoire, `icp_id`, `persona_id` et `opportunity_id` facultatifs (`null` si inconnus), `channel` (`email`, `linkedin_connection`, `linkedin_message`, `phone`, `other`), `status` (`draft`, `ready`, `archived`), `angle`, `subject`, `body`, `call_to_action` et `signal_ids`. Le persona doit appartenir à l'ICP choisi ; le contact, le cas d'usage et chaque signal doivent appartenir à la société. `ready` signifie **prêt à relire**, jamais envoyé. Pour modifier, fournir `draft_id`, `expected_version` et le brouillon complet ; une version périmée est rejetée et l'ancienne version reste dans l'historique. `crm_list_outreach_drafts` permet ensuite de vérifier l'enregistrement, filtré par `contact_id` si nécessaire.
+
+Exemple :
+
+```json
+{
+  "company_id": "<UUID_SOCIETE>",
+  "idempotency_key": "premier-email-paul-2026-10",
+  "draft": {
+    "contact_id": "<UUID_CONTACT_PAUL>",
+    "icp_id": "<UUID_ICP_PARTENARIATS>",
+    "persona_id": "<UUID_PERSONA_REV_OPS>",
+    "opportunity_id": null,
+    "channel": "email",
+    "status": "draft",
+    "angle": "Le signal de recrutement suggère un besoin possible ; à vérifier.",
+    "subject": "Échange sur les opérations partenariats ?",
+    "body": "Bonjour Paul, ...",
+    "call_to_action": "Seriez-vous disponible 15 minutes ?",
+    "signal_ids": ["<UUID_SIGNAL_SOURCE>"]
+  }
+}
+```
 
 ### Import d'une cartographie
 
@@ -139,6 +178,38 @@ La source précise son type, sa référence (par exemple `PROSPECTION_KACTUS.mp4
 Une société peut avoir plusieurs ICP simultanément. `crm_get_company_icps` lit leurs statuts et l'historique des observations ; `crm_upsert_company_icp` reçoit l'identifiant d'un ICP existant, un statut (`candidate`, `investigating`, `qualified`, `disqualified` ou `unknown`), un type de preuve, la source et d'éventuelles notes. `qualified` et `disqualified` exigent une preuve `observed`, `verified` ou `declared` : une simple inférence ne suffit pas. Une mise à jour réellement différente ajoute une observation et conserve les précédentes.
 
 `crm_add_company_research` sépare `observed_fact`, `hypothesis`, `declared_pain`, `confirmed_use_case` et `note`. Une hypothèse utilise `inferred` ou `unknown` et indique une justification ainsi qu'une question de vérification ; un pain déclaré utilise `declared` ; un cas d'usage confirmé exige `declared` ou `verified`. Pour toute assertion présentée comme observée, déclarée ou vérifiée, fournir une source repérable. Les types de source prévus comprennent `linkedin_video`, `linkedin_profile`, `company_website`, `press`, `job_posting`, `user_manual`, `chatgpt_research`, `codex_research` et `other`.
+
+### Signaux de fit et de timing
+
+Chaque entreprise possède une liste de signaux éditables dans l'onglet **Recherche → Signaux de fit et de timing**. L'entité `prospect_factory_company_signals` vit dans la base CRM existante ; l'interface et MCP appellent le même service `company-signals.ts`. Les signaux ne modifient pas automatiquement le score de qualification. Ils fournissent la matière première pour analyser le fit, le timing et, plus tard, rédiger une approche adaptée à l'ICP, au persona et au buying committee.
+
+Un signal contient `kind` (`job_posting`, `article`, `press_release`, `company_announcement`, `funding`, `leadership_change`, `product_launch`, `website` ou `other`), `title`, `description`, `readiness_dimension` (`fit`, `timing`, `both` ou `unknown`), `evidence_type`, `source_reference` ou `source_url`, et éventuellement `published_at`, `observed_at` et `interpretation`. La **description** reprend ce que la source montre ; l'**interprétation** reste une hypothèse commerciale affichée séparément. `observed`, `verified` et `declared` exigent un lien ou une référence de source. Les dates sont au format `YYYY-MM-DD` ; une date inconnue reste `null`.
+
+Exemple de création via `crm_upsert_company_signal` :
+
+```json
+{
+  "company_id": "<UUID_KACTUS>",
+  "idempotency_key": "kactus-offre-finance-2026-10",
+  "signal": {
+    "kind": "job_posting",
+    "title": "Recrutement Lead Finance Ops",
+    "description": "L'offre mentionne la consolidation de données financières et le reporting mensuel.",
+    "readiness_dimension": "timing",
+    "interpretation": "Un besoin de fiabiliser le reporting est possible ; à vérifier avec l'équipe finance.",
+    "evidence_type": "observed",
+    "source_reference": "Offre d'emploi Kactus",
+    "source_url": "https://example.org/offre-kactus",
+    "published_at": null,
+    "observed_at": "2026-10-02",
+    "archived": false
+  }
+}
+```
+
+Pour modifier ou archiver, relire d'abord le signal, puis fournir `signal_id`, `expected_version` et tous les champs `signal`. Un changement concurrent produit un conflit plutôt qu'une écriture silencieuse. Les versions antérieures sont conservées dans `prospect_factory_company_signal_revisions`. Une même `idempotency_key` rejouée avec le même contenu ne crée pas de doublon. L'archivage conserve le texte et les pièces jointes et peut être annulé.
+
+L'interface accepte les PDF, PNG, JPEG et WebP jusqu'à **10 Mo par fichier**. Les octets et les métadonnées sont stockés dans la même base SQLite, afin qu'une sauvegarde de la base couvre aussi les pièces jointes. Le service contrôle le type réel du fichier, calcule son SHA-256 et évite un second enregistrement des mêmes octets pour le même signal. Côté MCP, appeler `crm_add_company_signal_attachment` avec `company_id`, `signal_id`, `file_name`, `mime_type` et `content_base64`. Les lectures ordinaires retournent uniquement le nom, le type, la taille et l'identifiant du fichier ; `crm_get_company_signal_attachment` restitue une image comme bloc image MCP ou un PDF en Base64, sur demande, avec ces trois identifiants (`company_id`, `signal_id`, `attachment_id`). Pour le raisonnement et le copywriting, saisir la partie pertinente du document dans la description du signal et conserver l'original en pièce jointe.
 
 ### Exemple de séquence dans ChatGPT ou Codex
 

@@ -56,7 +56,7 @@ try {
   const newVersion = Number(verified.prepare("PRAGMA user_version").get().user_version);
   const integrity = verified.prepare("PRAGMA integrity_check").get().integrity_check;
   verified.close();
-  assert.ok(newVersion >= 9, `expected CRM schema v9+, got ${newVersion}`);
+  assert.ok(newVersion >= 11, `expected CRM schema v11+, got ${newVersion}`);
   assert.equal(integrity, "ok");
   process.stdout.write(`CRM migration verified: schema ${oldVersion} -> ${newVersion}, integrity ok. Backup: ${backupPath}\n`);
 } catch (error) {

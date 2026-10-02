@@ -7,7 +7,8 @@ import { createCaraaiosMcpServer } from "@/lib/caraaios-mcp-server";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const handler = createMcpHandler(createCaraaiosMcpServer, { maxRequestBodySize: 8_000_000 });
+const MAX_MCP_REQUEST_BYTES = 15_000_000; // One 10 MB attachment encoded as Base64, plus the JSON envelope.
+const handler = createMcpHandler(createCaraaiosMcpServer, { maxRequestBodySize: MAX_MCP_REQUEST_BYTES });
 
 function sameSecret(left: string, right: string): boolean {
   const a = Buffer.from(left);
@@ -41,7 +42,7 @@ async function serve(request: Request): Promise<Response> {
       headers: { "WWW-Authenticate": "Bearer realm=\"Caraaios CRM MCP\"", "Cache-Control": "no-store" } });
   }
   const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > 8_000_000) return Response.json({ error: "MCP request too large." }, { status: 413 });
+  if (contentLength > MAX_MCP_REQUEST_BYTES) return Response.json({ error: "MCP request too large." }, { status: 413 });
   return handler.fetch(request);
 }
 

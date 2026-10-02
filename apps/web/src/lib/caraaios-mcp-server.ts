@@ -13,6 +13,13 @@ import { getCompanyIcps, upsertCompanyIcp } from "@/lib/caraaios-mcp-icp";
 import { caraaiosImportPersonSchema, importCaraaiosCompanyMap } from "@/lib/caraaios-mcp-import";
 import { addCaraaiosCompanyResearch, CARAAIOS_SOURCE_TYPES, recordCaraaiosMcpAudit } from "@/lib/caraaios-mcp-research";
 import { getProspect, listIcps } from "@/lib/prospect-factory-crm-db";
+import { COMPANY_SIGNAL_FILE_TYPES, companySignalFieldsSchema } from "@/lib/company-signal-contract";
+import {
+  addCompanySignalAttachment, decodeSignalAttachmentBase64, getCompanySignalAttachment,
+  listCompanySignals, upsertCompanySignal
+} from "@/lib/company-signals";
+import { outreachDraftFieldsSchema } from "@/lib/outreach-draft-contract";
+import { getOutreachContext, listOutreachDrafts, upsertOutreachDraft } from "@/lib/outreach-drafts";
 
 const uuid = z.uuid();
 const shortText = (max: number) => z.string().trim().min(1).max(max);
@@ -117,12 +124,12 @@ export function createCaraaiosMcpServer(): McpServer {
   });
 
   server.registerTool("crm_get_company_map", {
-    description: "Read the existing CRM organigram with people, sourced observations, relations, buying committee, multiple ICPs and notes. Use after an import to verify persistence.",
+    description: "Read the existing CRM organigram with people, sourced observations, relations, buying committee, multiple ICPs, notes and the 50 most recent company signals. Use after an import to verify persistence; page through all signals with crm_get_company_signals.",
     // getAccountMap synchronizes missing contact nodes in the shared CRM map.
     annotations: upsert,
     inputSchema: z.object({ company_id: uuid, include_people: z.boolean().optional(), include_relationships: z.boolean().optional(),
       include_evidence: z.boolean().optional(), include_research: z.boolean().optional(),
-      include_buying_committee: z.boolean().optional() }).strict().shape
+      include_buying_committee: z.boolean().optional(), include_signals: z.boolean().optional() }).strict().shape
   }, async ({ company_id, ...options }) => {
     try { return ok({ map: getCaraaiosCompanyMap(company_id, options) }); } catch (error) { return failure(error); }
   });
@@ -278,6 +285,109 @@ export function createCaraaiosMcpServer(): McpServer {
       const result = addCaraaiosCompanyResearch(input);
       const auditRecorded = audit("crm_add_company_research", input.company_id, result.created ? "created" : "unchanged",
         { kind: input.kind });
+      return ok({ ...result, audit_recorded: auditRecorded } as unknown as ToolValue);
+    } catch (error) { return failure(error); }
+  });
+
+  server.registerTool("crm_get_company_signals", {
+    description: "List a company's editable fit/timing signals, source links, observed facts, separate commercial interpretations and attachment metadata. Returns at most 100 per page; file bytes are fetched only on request.",
+    annotations: read,
+    inputSchema: z.object({ company_id: uuid, limit: z.number().int().min(1).max(100).optional(),
+      offset: z.number().int().min(0).max(100_000).optional(), include_archived: z.boolean().optional() }).strict().shape
+  }, async ({ company_id, limit, offset, include_archived }) => {
+    try { return ok({ signals: listCompanySignals(company_id, { limit, offset, includeArchived: include_archived }) }); }
+    catch (error) { return failure(error); }
+  });
+
+  server.registerTool("crm_upsert_company_signal", {
+    description: "Create or edit one sourced company readiness signal (article, job posting or other). The description records source content; interpretation is a separate hypothesis. For creation provide a stable idempotency_key. For an edit provide signal_id and expected_version from the last read; conflicts never overwrite another change. Archiving is reversible.",
+    annotations: upsert,
+    inputSchema: z.object({ company_id: uuid, signal_id: uuid.optional(),
+      expected_version: z.number().int().min(1).optional(), idempotency_key: shortText(240).optional(),
+      signal: companySignalFieldsSchema }).strict().shape
+  }, async ({ company_id, signal_id, expected_version, idempotency_key, signal }) => {
+    try {
+      const result = upsertCompanySignal(company_id, { signal_id, expected_version, idempotency_key, signal }, "caraaios-mcp");
+      const auditRecorded = audit("crm_upsert_company_signal", result.signal.id, result.outcome, { company_id });
+      return ok({ ...result, audit_recorded: auditRecorded } as unknown as ToolValue);
+    } catch (error) { return failure(error); }
+  });
+
+  server.registerTool("crm_add_company_signal_attachment", {
+    description: "Attach one original PDF, PNG, JPEG or WebP (10 MB maximum) to an existing company signal. Repeating identical file bytes is idempotent. Keep source text and URLs in the signal for efficient strategy reads; use this only for the original supporting file.",
+    annotations: upsert,
+    inputSchema: z.object({ company_id: uuid, signal_id: uuid, file_name: shortText(255),
+      mime_type: z.enum(COMPANY_SIGNAL_FILE_TYPES), content_base64: z.string().min(1).max(14_000_000) }).strict().shape
+  }, async ({ company_id, signal_id, file_name, mime_type, content_base64 }) => {
+    try {
+      const result = addCompanySignalAttachment(company_id, signal_id,
+        { fileName: file_name, mimeType: mime_type, bytes: decodeSignalAttachmentBase64(content_base64) }, "caraaios-mcp");
+      const auditRecorded = audit("crm_add_company_signal_attachment", signal_id,
+        result.created ? "created" : "unchanged", { company_id, attachment_id: result.attachment.id });
+      return ok({ ...result, audit_recorded: auditRecorded } as unknown as ToolValue);
+    } catch (error) { return failure(error); }
+  });
+
+  server.registerTool("crm_get_company_signal_attachment", {
+    description: "Fetch one signal's original attachment by ID. Images are returned as MCP image content for visual analysis; PDFs are returned as Base64. Call only when the original file is needed; crm_get_company_signals already returns metadata without large binary content.",
+    annotations: read,
+    inputSchema: z.object({ company_id: uuid, signal_id: uuid, attachment_id: uuid }).strict().shape
+  }, async ({ company_id, signal_id, attachment_id }) => {
+    try {
+      const result = getCompanySignalAttachment(company_id, signal_id, attachment_id);
+      if (!result) throw new Error("Pièce jointe introuvable dans ce signal.");
+      if (result.attachment.mime_type.startsWith("image/")) {
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify({ attachment: result.attachment }) },
+            { type: "image" as const, mimeType: result.attachment.mime_type, data: result.bytes.toString("base64") }
+          ],
+          structuredContent: { attachment: result.attachment }
+        };
+      }
+      return ok({ attachment: result.attachment, content_base64: result.bytes.toString("base64") });
+    } catch (error) { return failure(error); }
+  });
+
+  server.registerTool("crm_get_outreach_context", {
+    description: "Read a compact, person-specific copywriting context for one existing CRM contact: company research, ICP status, selected persona, relevant organization links and buying roles, sourced fit/timing signals, observations and existing drafts. Use this before drafting an approach. No message is generated or sent. Reading may synchronize the person's missing map node, like crm_get_company_map.",
+    annotations: upsert,
+    inputSchema: z.object({ company_id: uuid, contact_id: uuid, icp_id: uuid.optional(),
+      persona_id: uuid.optional(), opportunity_id: uuid.optional(),
+      signal_limit: z.number().int().min(1).max(50).optional() }).strict().shape
+  }, async ({ company_id, contact_id, icp_id, persona_id, opportunity_id, signal_limit }) => {
+    try { return ok({ context: getOutreachContext(company_id, contact_id, {
+      icpId: icp_id, personaId: persona_id, opportunityId: opportunity_id, signalLimit: signal_limit
+    }) as unknown as ToolValue }); }
+    catch (error) { return failure(error); }
+  });
+
+  server.registerTool("crm_list_outreach_drafts", {
+    description: "List stored outreach drafts for a company, optionally restricted to one contact. Each draft retains the selected ICP, persona, channel, status, source signal references and version. Drafts are neither generated nor sent by this tool.",
+    annotations: read,
+    inputSchema: z.object({ company_id: uuid, contact_id: uuid.optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+      offset: z.number().int().min(0).max(100_000).optional(),
+      include_archived: z.boolean().optional() }).strict().shape
+  }, async ({ company_id, contact_id, limit, offset, include_archived }) => {
+    try { return ok({ drafts: listOutreachDrafts(company_id, {
+      contactId: contact_id, limit, offset, includeArchived: include_archived
+    }) }); } catch (error) { return failure(error); }
+  });
+
+  server.registerTool("crm_upsert_outreach_draft", {
+    description: "Persist a human/ChatGPT/Codex-written outreach draft for ONE existing CRM contact, in a selected ICP/persona/use-case context. Requires the full draft including body and can cite up to 25 company signal IDs. Use a stable idempotency_key on creation; on edit provide draft_id and expected_version so concurrent changes cannot be lost. Never claim an inferred pain as fact. Status ready means ready to review, not sent. This tool does not generate or send messages.",
+    annotations: upsert,
+    inputSchema: z.object({ company_id: uuid, draft_id: uuid.optional(),
+      expected_version: z.number().int().min(1).optional(),
+      idempotency_key: shortText(240).optional(),
+      draft: outreachDraftFieldsSchema }).strict().shape
+  }, async ({ company_id, draft_id, expected_version, idempotency_key, draft }) => {
+    try {
+      const result = upsertOutreachDraft(company_id,
+        { draft_id, expected_version, idempotency_key, draft }, "caraaios-mcp");
+      const auditRecorded = audit("crm_upsert_outreach_draft", result.draft.id, result.outcome,
+        { company_id, contact_id: result.draft.contact_id });
       return ok({ ...result, audit_recorded: auditRecorded } as unknown as ToolValue);
     } catch (error) { return failure(error); }
   });

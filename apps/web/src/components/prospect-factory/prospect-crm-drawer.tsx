@@ -51,9 +51,11 @@ import {
 } from "@/lib/prospect-factory-crm-contract";
 import styles from "./prospect-crm-drawer.module.css";
 import { ContextualMapLink } from "./contextual-map-link";
+import { CompanySignals } from "./company-signals";
+import { CompanyOutreach } from "./company-outreach";
 import type { MapReturnView } from "./prospect-navigation";
 
-type DrawerTab = "tracking" | "research" | "record" | "activity";
+type DrawerTab = "tracking" | "research" | "copywriting" | "record" | "activity";
 type EditableActivityType = Extract<ProspectActivityType, "note" | "call" | "email" | "meeting">;
 
 type ProspectDetailResponse = {
@@ -501,7 +503,7 @@ export function ProspectCrmDrawer({ prospect: row, trackingId, initialTab, initi
   function navigateTabs(event: ReactKeyboardEvent<HTMLElement>) {
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const order: DrawerTab[] = ["tracking", "research", "record", "activity"];
+    const order: DrawerTab[] = ["tracking", "research", "copywriting", "record", "activity"];
     const currentIndex = order.indexOf(tab);
     const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? order.length - 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (currentIndex - 1 + order.length) % order.length : (currentIndex + 1) % order.length;
     const next = order[nextIndex];
@@ -680,6 +682,7 @@ export function ProspectCrmDrawer({ prospect: row, trackingId, initialTab, initi
             <nav className={styles.tabs} role="tablist" aria-label="Sections de la fiche prospect" onKeyDown={navigateTabs}>
               <button id="prospect-tab-tracking" type="button" role="tab" aria-selected={tab === "tracking"} aria-controls="prospect-panel-tracking" tabIndex={tab === "tracking" ? 0 : -1} className={tab === "tracking" ? styles.activeTab : ""} onClick={() => setTab("tracking")}><BriefcaseBusiness size={17} aria-hidden="true" /> Suivi commercial</button>
               <button id="prospect-tab-research" type="button" role="tab" aria-selected={tab === "research"} aria-controls="prospect-panel-research" tabIndex={tab === "research" ? 0 : -1} className={tab === "research" ? styles.activeTab : ""} onClick={() => setTab("research")}><Search size={17} aria-hidden="true" /> Recherche</button>
+              <button id="prospect-tab-copywriting" type="button" role="tab" aria-selected={tab === "copywriting"} aria-controls="prospect-panel-copywriting" tabIndex={tab === "copywriting" ? 0 : -1} className={tab === "copywriting" ? styles.activeTab : ""} onClick={() => setTab("copywriting")}><MessageSquareText size={17} aria-hidden="true" /> Copywriting</button>
               <button id="prospect-tab-record" type="button" role="tab" aria-selected={tab === "record"} aria-controls="prospect-panel-record" tabIndex={tab === "record" ? 0 : -1} className={tab === "record" ? styles.activeTab : ""} onClick={() => setTab("record")}><Building2 size={17} aria-hidden="true" /> Fiche entreprise</button>
               <button id="prospect-tab-activity" type="button" role="tab" aria-selected={tab === "activity"} aria-controls="prospect-panel-activity" tabIndex={tab === "activity" ? 0 : -1} className={tab === "activity" ? styles.activeTab : ""} onClick={() => setTab("activity")}><Activity size={17} aria-hidden="true" /> Activité <span>{activities.length}</span></button>
             </nav>
@@ -788,6 +791,8 @@ export function ProspectCrmDrawer({ prospect: row, trackingId, initialTab, initi
               </>}
             </section>
 
+            <CompanySignals companyId={prospect?.id ?? null} />
+
             <section className={styles.card} aria-labelledby="research-account-title">
               <div className={styles.cardHeading}><div><span>Recherche compte</span><h3 id="research-account-title">Synthèse, hypothèse et prochaines vérifications</h3></div></div>
               {!prospect ? <p className={styles.gate}>Les résultats de recherche apparaîtront ici après l’import de qualification.</p> : <dl className={styles.researchFacts}>
@@ -830,6 +835,11 @@ export function ProspectCrmDrawer({ prospect: row, trackingId, initialTab, initi
             </div>
 
 
+          </div> : null}
+
+          {tab === "copywriting" ? <div id="prospect-panel-copywriting" role="tabpanel" aria-labelledby="prospect-tab-copywriting" className={styles.panel}>
+            <CompanyOutreach companyId={prospect?.id ?? null} contacts={prospect?.contacts ?? []}
+              initialContactId={initialContactId} />
           </div> : null}
 
           {tab === "activity" ? <div id="prospect-panel-activity" role="tabpanel" aria-labelledby="prospect-tab-activity" className={`${styles.panel} ${styles.activityPanel}`}>

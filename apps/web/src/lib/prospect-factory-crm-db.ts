@@ -1283,6 +1283,132 @@ function getDatabase() {
       throw error;
     }
   }
+  // Company signals are shared by the CRM UI and MCP. Files live in this same
+  // SQLite database so a CRM backup also contains their supporting evidence.
+  if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 10) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 10) {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS prospect_factory_company_signals (
+            id TEXT PRIMARY KEY,
+            prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK(kind IN ('job_posting','article','press_release','company_announcement','funding','leadership_change','product_launch','website','other')),
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            readiness_dimension TEXT NOT NULL CHECK(readiness_dimension IN ('fit','timing','both','unknown')),
+            interpretation TEXT NOT NULL DEFAULT '',
+            evidence_type TEXT NOT NULL CHECK(evidence_type IN ('observed','verified','declared','inferred','unknown')),
+            source_reference TEXT,
+            source_url TEXT,
+            published_at TEXT,
+            observed_at TEXT,
+            archived_at TEXT,
+            idempotency_key TEXT,
+            version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+            created_by TEXT NOT NULL,
+            updated_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS prospect_factory_company_signals_prospect_idx
+            ON prospect_factory_company_signals(prospect_id, archived_at, observed_at DESC, created_at DESC);
+          CREATE UNIQUE INDEX IF NOT EXISTS prospect_factory_company_signals_idempotency_idx
+            ON prospect_factory_company_signals(prospect_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+          CREATE TABLE IF NOT EXISTS prospect_factory_company_signal_attachments (
+            id TEXT PRIMARY KEY,
+            signal_id TEXT NOT NULL REFERENCES prospect_factory_company_signals(id) ON DELETE CASCADE,
+            file_name TEXT NOT NULL,
+            mime_type TEXT NOT NULL CHECK(mime_type IN ('application/pdf','image/png','image/jpeg','image/webp')),
+            size_bytes INTEGER NOT NULL CHECK(size_bytes > 0 AND size_bytes <= 10485760),
+            sha256 TEXT NOT NULL,
+            data BLOB NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(signal_id, sha256)
+          );
+          CREATE INDEX IF NOT EXISTS prospect_factory_company_signal_attachments_signal_idx
+            ON prospect_factory_company_signal_attachments(signal_id, created_at);
+          CREATE TABLE IF NOT EXISTS prospect_factory_company_signal_revisions (
+            id TEXT PRIMARY KEY,
+            signal_id TEXT NOT NULL REFERENCES prospect_factory_company_signals(id) ON DELETE CASCADE,
+            previous_version INTEGER NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS prospect_factory_company_signal_revisions_signal_idx
+            ON prospect_factory_company_signal_revisions(signal_id, created_at DESC);
+          PRAGMA user_version = 10;
+        `);
+        const foreignKeyViolation = db.prepare("PRAGMA foreign_key_check").get();
+        if (foreignKeyViolation) throw new Error("La migration des signaux a révélé une référence invalide.");
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  // Outreach drafts belong to a selected CRM contact. Snapshot labels preserve
+  // the intended recipient and ICP/persona even if catalogue records change.
+  if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 11) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) < 11) {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS prospect_factory_outreach_drafts (
+            id TEXT PRIMARY KEY,
+            prospect_id TEXT NOT NULL REFERENCES prospect_factory_prospects(id) ON DELETE CASCADE,
+            contact_id TEXT REFERENCES prospect_factory_contacts(id) ON DELETE SET NULL,
+            contact_name TEXT NOT NULL,
+            contact_title TEXT,
+            icp_id TEXT REFERENCES prospect_factory_icps(id) ON DELETE SET NULL,
+            icp_name TEXT,
+            persona_id TEXT REFERENCES prospect_factory_icp_personas(id) ON DELETE SET NULL,
+            persona_label TEXT,
+            opportunity_id TEXT REFERENCES prospect_factory_map_opportunities(id) ON DELETE SET NULL,
+            opportunity_name TEXT,
+            channel TEXT NOT NULL CHECK(channel IN ('email','linkedin_connection','linkedin_message','phone','other')),
+            status TEXT NOT NULL CHECK(status IN ('draft','ready','archived')),
+            angle TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '',
+            body TEXT NOT NULL,
+            call_to_action TEXT NOT NULL DEFAULT '',
+            signal_ids_json TEXT NOT NULL DEFAULT '[]',
+            idempotency_key TEXT,
+            version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+            created_by TEXT NOT NULL,
+            updated_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS prospect_factory_outreach_drafts_target_idx
+            ON prospect_factory_outreach_drafts(prospect_id, contact_id, status, updated_at DESC);
+          CREATE UNIQUE INDEX IF NOT EXISTS prospect_factory_outreach_drafts_idempotency_idx
+            ON prospect_factory_outreach_drafts(prospect_id, idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
+          CREATE TABLE IF NOT EXISTS prospect_factory_outreach_draft_revisions (
+            id TEXT PRIMARY KEY,
+            draft_id TEXT NOT NULL REFERENCES prospect_factory_outreach_drafts(id) ON DELETE CASCADE,
+            previous_version INTEGER NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS prospect_factory_outreach_draft_revisions_draft_idx
+            ON prospect_factory_outreach_draft_revisions(draft_id, created_at DESC);
+          PRAGMA user_version = 11;
+        `);
+        const foreignKeyViolation = db.prepare("PRAGMA foreign_key_check").get();
+        if (foreignKeyViolation) throw new Error("La migration des brouillons a révélé une référence invalide.");
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   return db;
 }
 

@@ -352,7 +352,7 @@ describe("Account map persistence", () => {
       version: relation.version
     });
     crm.withAccountMapDatabase((db) => {
-      expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(9);
+      expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(11);
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(db.prepare("SELECT evidence_type FROM prospect_factory_map_evidence_sources WHERE subject_kind='relation' AND subject_id=?")
         .get(relation.id)).toEqual({ evidence_type: null });

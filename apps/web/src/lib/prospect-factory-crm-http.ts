@@ -22,6 +22,10 @@ export function validateProspectCrmMutation(request: NextRequest, maximumBytes =
   if (Number.isFinite(length) && length > maximumBytes) {
     return NextResponse.json({ error: "Corps de requête trop volumineux.", code: "PAYLOAD_TOO_LARGE" }, { status: 413, headers: { "Cache-Control": "no-store" } });
   }
+  return validateProspectCrmOriginAndRate(request, "prospect-factory-crm-write");
+}
+
+function validateProspectCrmOriginAndRate(request: NextRequest, rateBucket: string) {
   const origin = request.headers.get("origin");
   if (origin) {
     const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
@@ -32,10 +36,23 @@ export function validateProspectCrmMutation(request: NextRequest, maximumBytes =
       return adminForbidden("Origine de la requête invalide.");
     }
   }
-  if (!consumePublicRateLimit(request, "prospect-factory-crm-write")) {
+  if (!consumePublicRateLimit(request, rateBucket)) {
     return NextResponse.json({ error: "Trop de modifications. Réessayez dans une minute.", code: "RATE_LIMITED" }, { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": "60" } });
   }
   return null;
+}
+
+export function validateProspectCrmUpload(request: NextRequest) {
+  if (!request.headers.get("content-type")?.toLowerCase().startsWith("multipart/form-data")) {
+    return NextResponse.json({ error: "Une pièce jointe doit être envoyée en formulaire multipart.", code: "MULTIPART_REQUIRED" },
+      { status: 415, headers: { "Cache-Control": "no-store" } });
+  }
+  const length = Number(request.headers.get("content-length") ?? 0);
+  if (Number.isFinite(length) && length > 11 * 1024 * 1024) {
+    return NextResponse.json({ error: "Pièce jointe trop volumineuse (10 Mo maximum).", code: "PAYLOAD_TOO_LARGE" },
+      { status: 413, headers: { "Cache-Control": "no-store" } });
+  }
+  return validateProspectCrmOriginAndRate(request, "prospect-factory-crm-upload");
 }
 
 export function crmError(message: string, status: number, code: string) {
